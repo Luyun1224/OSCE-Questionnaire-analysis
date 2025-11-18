@@ -1,0 +1,486 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { 
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
+  Tooltip as RechartsTooltip 
+} from 'recharts';
+import { 
+  Filter, MessageSquare, ClipboardList, Calendar, Award, 
+  CheckCircle, AlertCircle, FileText, Users, ChevronDown, Star, TrendingDown, Loader2
+} from 'lucide-react';
+
+// --- 1. 設定與常數 ---
+
+// 已更新為您的 Google Apps Script 網址
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
+
+const QUESTION_MAPPING = {
+  Q1: "1. 測驗內容及其難度合宜",
+  Q2: "2. 評核表評分項目合宜",
+  Q3: "3. 評分說明內容清楚、合宜",
+  Q4: "4. 試題指引內容足夠",
+  Q5: "5. 測驗時間(8 mins)長短合宜",
+  Q6: "6. 試場各項標示、移動路線規劃清楚、合宜",
+  Q7: "7. 試場各項鈴聲、廣播清楚、合宜",
+  Q8: "8. 試務運作流程順暢、試務人員紀律良好",
+};
+
+// 5分量表顏色
+const SCALE_COLORS = {
+  5: '#3b82f6', // Blue 500 - Very Agree
+  4: '#93c5fd', // Blue 300 - Agree
+  3: '#9ca3af', // Gray 400 - Neutral
+  2: '#fdba74', // Orange 300 - Disagree
+  1: '#ef4444'  // Red 500 - Very Disagree
+};
+
+const KEYWORDS = [
+  { text: "口罩", value: 20, color: '#3b82f6' },
+  { text: "手套", value: 15, color: '#ef4444' },
+  { text: "X光", value: 18, color: '#f59e0b' },
+  { text: "評分表", value: 12, color: '#ef4444' },
+  { text: "難度", value: 14, color: '#f97316' },
+  { text: "流程順暢", value: 25, color: '#3b82f6' },
+  { text: "動線", value: 10, color: '#64748b' },
+  { text: "鈴聲", value: 12, color: '#3b82f6' },
+  { text: "SP表現", value: 16, color: '#64748b' },
+  { text: "時間太短", value: 30, color: '#2563eb' },
+  { text: "午餐好吃", value: 8, color: '#9ca3af' },
+  { text: "感謝", value: 22, color: '#3b82f6' },
+];
+
+// --- 2. 子元件 ---
+
+const StatCard = ({ title, value, subtitle, icon: Icon, colorClass, iconBgClass }) => (
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-start justify-between">
+    <div>
+      <h3 className="text-gray-500 text-sm font-medium mb-1">{title}</h3>
+      <div className="text-3xl font-bold text-gray-800">{value}</div>
+      {subtitle && <div className="text-sm text-gray-400 mt-1">{subtitle}</div>}
+    </div>
+    <div className={`p-3 rounded-full ${iconBgClass}`}>
+      <Icon className={`w-6 h-6 ${colorClass}`} />
+    </div>
+  </div>
+);
+
+const WordCloud = () => (
+  <div className="flex flex-wrap gap-3 p-4 justify-center items-center h-full">
+    {KEYWORDS.map((word, idx) => (
+      <span 
+        key={idx}
+        style={{ 
+          fontSize: `${12 + word.value * 0.8}px`, 
+          color: word.color,
+          opacity: 0.9 
+        }}
+        className="font-bold cursor-default hover:scale-110 transition-transform"
+      >
+        {word.text}
+      </span>
+    ))}
+  </div>
+);
+
+// CSS 堆疊長條圖元件
+const StackedBarRow = ({ label, data, total }) => {
+  return (
+    <div className="mb-6 last:mb-0 group">
+      <div className="flex justify-between items-baseline mb-2">
+        <h4 className="text-sm font-medium text-gray-700 flex-1 mr-4">{label}</h4>
+        <span className="text-xs text-gray-400">N={total}</span>
+      </div>
+      <div className="h-6 w-full flex rounded-full overflow-hidden bg-gray-100 relative">
+        {[5, 4, 3, 2, 1].map((score) => {
+          const count = data[score] || 0;
+          const percentage = total > 0 ? (count / total) * 100 : 0;
+          if (percentage === 0) return null;
+          return (
+            <div
+              key={score}
+              style={{ width: `${percentage}%`, backgroundColor: SCALE_COLORS[score] }}
+              className="h-full transition-all duration-300 hover:brightness-90 relative group/segment"
+              title={`${count}人 (${percentage.toFixed(1)}%)`}
+            >
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover/segment:block bg-gray-800 text-white text-xs py-1 px-2 rounded whitespace-nowrap z-10 opacity-0 group-hover/segment:opacity-100 transition-opacity">
+                {score}分: {count}人 ({percentage.toFixed(0)}%)
+                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// --- 3. 主應用程式 ---
+
+export default function ExaminerDashboard() {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filterDate, setFilterDate] = useState('All');
+  const [filterStation, setFilterStation] = useState('All');
+
+  // 從 Google Sheet API 讀取資料
+  useEffect(() => {
+    setLoading(true);
+    fetch(GOOGLE_SCRIPT_URL)
+      .then(response => {
+        if (!response.ok) throw new Error('Network response was not ok');
+        return response.json();
+      })
+      .then(jsonData => {
+        // 簡單的資料型別轉換，確保分數是數字
+        const formattedData = jsonData.map(item => ({
+          ...item,
+          station: parseInt(item.station) || item.station,
+          q1: parseInt(item.q1) || 0,
+          q2: parseInt(item.q2) || 0,
+          q3: parseInt(item.q3) || 0,
+          q4: parseInt(item.q4) || 0,
+          q5: parseInt(item.q5) || 0,
+          q6: parseInt(item.q6) || 0,
+          q7: parseInt(item.q7) || 0,
+          q8: parseInt(item.q8) || 0,
+        }));
+        setData(formattedData);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Fetch error:", err);
+        setError("無法讀取 Google Sheet 資料，請檢查您的網路連線或確認權限是否設定為「所有人 (Anyone)」。");
+        setLoading(false);
+      });
+  }, []);
+
+  // 取得選項
+  const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
+  const stations = useMemo(() => ['All', ...new Set(data.map(d => d.station))].sort((a, b) => a - b), [data]);
+
+  // 篩選數據
+  const filteredData = useMemo(() => {
+    return data.filter(item => {
+      const dateMatch = filterDate === 'All' || item.date === filterDate;
+      const stationMatch = filterStation === 'All' || item.station === (filterStation === 'All' ? item.station : parseInt(filterStation));
+      return dateMatch && stationMatch;
+    });
+  }, [data, filterDate, filterStation]);
+
+  // 計算統計數據 (KPI)
+  const stats = useMemo(() => {
+    const totalCount = filteredData.length;
+    if (totalCount === 0) return { totalCount: 0, avgSatisfaction: 0, itemsToImprove: 0 };
+
+    let totalScoreSum = 0;
+    let totalItems = 0;
+    
+    filteredData.forEach(item => {
+      for(let i=1; i<=8; i++) {
+        totalScoreSum += (item[`q${i}`] || 0);
+        totalItems++;
+      }
+    });
+    const avgSatisfaction = totalItems ? (totalScoreSum / totalItems).toFixed(1) : 0;
+
+    let itemsToImprove = 0;
+    for(let i=1; i<=8; i++) {
+      const qSum = filteredData.reduce((acc, cur) => acc + (cur[`q${i}`] || 0), 0);
+      const qAvg = totalCount ? (qSum / totalCount) : 0;
+      if(qAvg < 3.5) itemsToImprove++;
+    }
+
+    return { totalCount, avgSatisfaction, itemsToImprove };
+  }, [filteredData]);
+
+  // 準備分佈數據
+  const distributionData = useMemo(() => {
+    if (filteredData.length === 0) return [];
+    const questions = Object.keys(QUESTION_MAPPING); // Q1-Q8
+    return questions.map(key => {
+      const qId = key.toLowerCase(); // q1
+      const counts = { 1:0, 2:0, 3:0, 4:0, 5:0 };
+      
+      filteredData.forEach(item => {
+        const score = item[qId];
+        if(counts[score] !== undefined) counts[score]++;
+      });
+
+      return {
+        name: QUESTION_MAPPING[key],
+        shortName: key,
+        ...counts,
+        total: filteredData.length
+      };
+    });
+  }, [filteredData]);
+
+  // 準備 Radar Chart 數據
+  const radarData = useMemo(() => {
+    if (filteredData.length === 0) return [];
+    const data = [];
+    for(let i=1; i<=8; i++) {
+      const key = `q${i}`;
+      const sum = filteredData.reduce((acc, curr) => acc + (curr[key] || 0), 0);
+      const avg = filteredData.length ? (sum / filteredData.length).toFixed(2) : 0;
+      data.push({ subject: `Q${i}`, A: parseFloat(avg), fullMark: 5 });
+    }
+    return data;
+  }, [filteredData]);
+
+  const feedbackQ9 = useMemo(() => filteredData.filter(d => d.q9).map(d => ({...d, text: d.q9})), [filteredData]);
+  const feedbackQ10 = useMemo(() => filteredData.filter(d => d.q10).map(d => ({...d, text: d.q10})), [filteredData]);
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-12">
+      
+      {/* Top Navigation & Header */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center gap-4">
+              <Award className="w-6 h-6 text-blue-600" />
+              <span className="font-bold text-xl text-gray-800">高階臨床技能測驗 考官回饋分析儀表板</span>
+            </div>
+            <div className="hidden md:flex items-center gap-6 text-sm font-medium">
+              <button className="text-blue-600 border-b-2 border-blue-600 h-full px-2 flex items-center gap-2">
+                <FileText className="w-4 h-4" /> 考官回饋
+              </button>
+              <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2">
+                <Users className="w-4 h-4" /> 標準化病人回饋
+              </button>
+              <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4" /> 考生回饋
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+        
+        {/* Error State */}
+        {error && (
+           <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6 rounded-r">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <AlertCircle className="h-5 w-5 text-red-400" aria-hidden="true" />
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-700">{error}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Filter Section */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-end">
+            <div>
+              <label className="block text-sm font-medium text-gray-500 mb-2">選擇日期</label>
+              <div className="relative">
+                <select 
+                  className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  value={filterDate}
+                  onChange={(e) => setFilterDate(e.target.value)}
+                  disabled={loading || data.length === 0}
+                >
+                  <option value="All">全部日期</option>
+                  {dates.filter(d => d !== 'All').map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-500 mb-2">選擇站號</label>
+              <div className="relative">
+                <select 
+                  className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  value={filterStation}
+                  onChange={(e) => setFilterStation(e.target.value)}
+                  disabled={loading || data.length === 0}
+                >
+                  <option value="All">全部站號</option>
+                  {stations.filter(s => s !== 'All').map(s => <option key={s} value={s}>第 {s} 站</option>)}
+                </select>
+                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-500 mb-2">選擇梯次</label>
+              <div className="relative">
+                <select disabled className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none text-gray-400 cursor-not-allowed">
+                  <option>全部梯次</option>
+                </select>
+                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+            <div>
+              <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2" disabled={loading}>
+                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "套用篩選"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+            <Loader2 className="w-10 h-10 animate-spin mb-4 text-blue-500" />
+            <p>正在讀取 Google Sheet 資料...</p>
+          </div>
+        ) : data.length === 0 ? (
+           <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-white rounded-xl border border-dashed border-gray-300">
+            <ClipboardList className="w-12 h-12 mb-2 text-gray-300" />
+            <p>目前沒有資料，請確認 Google Sheet 是否有內容</p>
+          </div>
+        ) : (
+          <>
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <StatCard 
+                title="總回饋筆數" 
+                value={stats.totalCount} 
+                icon={ClipboardList} 
+                colorClass="text-blue-600" 
+                iconBgClass="bg-blue-50"
+              />
+              <StatCard 
+                title="整體滿意度 (平均)" 
+                value={`${stats.avgSatisfaction} / 5`} 
+                icon={Star} 
+                colorClass="text-green-500" 
+                iconBgClass="bg-green-50"
+              />
+              <StatCard 
+                title="待改進項目 (低於3.5分)" 
+                value={stats.itemsToImprove} 
+                icon={TrendingDown} 
+                colorClass="text-red-500" 
+                iconBgClass="bg-red-50"
+              />
+            </div>
+
+            {/* Main Charts Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+              
+              {/* Left: Stacked Bar Chart */}
+              <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex items-center justify-between mb-8 border-b border-gray-100 pb-4">
+                  <h2 className="text-lg font-bold text-gray-800">各項目前回饋分佈 (Q1-Q8)</h2>
+                  <div className="flex gap-3 text-xs text-gray-500 flex-wrap">
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[5]}}></div>非常同意</div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[4]}}></div>同意</div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[3]}}></div>無意見</div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[2]}}></div>不同意</div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[1]}}></div>非常不同意</div>
+                  </div>
+                </div>
+                
+                <div className="space-y-1">
+                  {distributionData.map((item) => (
+                    <StackedBarRow 
+                      key={item.shortName}
+                      label={item.name}
+                      data={item}
+                      total={item.total}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Right Column: Radar & Word Cloud */}
+              <div className="flex flex-col gap-8">
+                
+                {/* Radar Chart */}
+                <div className="bg-blue-50 p-6 rounded-xl shadow-sm border border-blue-100 flex-1 min-h-[300px] flex flex-col">
+                  <h2 className="text-lg font-bold text-blue-900 mb-4 text-center">整體滿意度雷達圖 (平均分數)</h2>
+                  <div className="flex-1 relative">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                        <PolarGrid stroke="#93c5fd" />
+                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#1e40af', fontSize: 11, fontWeight: 'bold' }} />
+                        <PolarRadiusAxis angle={30} domain={[0, 5]} tick={false} axisLine={false} />
+                        <Radar
+                          name="平均分"
+                          dataKey="A"
+                          stroke="#2563eb"
+                          strokeWidth={3}
+                          fill="#3b82f6"
+                          fillOpacity={0.4}
+                        />
+                        <RechartsTooltip />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Word Cloud */}
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex-1 min-h-[250px]">
+                  <h2 className="text-lg font-bold text-gray-800 mb-2">關鍵字詞雲 (Q9 & Q10)</h2>
+                  <WordCloud />
+                </div>
+
+              </div>
+            </div>
+
+            {/* Text Feedback Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+                
+                {/* Q9 Feedback */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
+                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                        <MessageSquare className="w-5 h-5 text-blue-500" />
+                        <h3 className="text-lg font-bold text-gray-800">Q9. 對於本考題之建議？</h3>
+                    </div>
+                    <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
+                        {feedbackQ9.length > 0 ? feedbackQ9.map((item, idx) => (
+                            <div key={idx} className="py-4 first:pt-0">
+                                <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
+                                <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
+                                    <Users className="w-3 h-3" />
+                                    {item.examiner} 
+                                    <span className="text-gray-300">|</span>
+                                    第{item.station}站
+                                    <span className="text-gray-300">|</span>
+                                    {item.date}
+                                </div>
+                            </div>
+                        )) : (
+                            <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Q10 Feedback */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
+                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                        <MessageSquare className="w-5 h-5 text-green-500" />
+                        <h3 className="text-lg font-bold text-gray-800">Q10. 整體活動建議？</h3>
+                    </div>
+                    <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
+                        {feedbackQ10.length > 0 ? feedbackQ10.map((item, idx) => (
+                            <div key={idx} className="py-4 first:pt-0">
+                                <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
+                                <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
+                                    <Users className="w-3 h-3" />
+                                    {item.examiner} 
+                                    <span className="text-gray-300">|</span>
+                                    第{item.station}站
+                                    <span className="text-gray-300">|</span>
+                                    {item.date}
+                                </div>
+                            </div>
+                        )) : (
+                            <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
+                        )}
+                    </div>
+                </div>
+
+            </div>
+          </>
+        )}
+
+      </div>
+    </div>
+  );
+}
