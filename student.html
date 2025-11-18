@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考生回饋分析儀表板</title>
+    
+    <!-- Tailwind CSS (僅作 Reset 用) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & Recharts -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+
+    <style>
+        body { background-color: #f3f4f6; font-family: "Microsoft JhengHei", sans-serif; margin: 0; padding: 0; box-sizing: border-box; }
+        * { box-sizing: border-box; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        /* CSS Utilities */
+        .st-container { max-width: 1200px; margin: 0 auto; padding: 0 1rem; }
+        .st-card { background: white; border-radius: 0.75rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; padding: 1.5rem; margin-bottom: 2rem; }
+        
+        /* Grid Layouts */
+        .st-grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        
+        /* Flex Layouts */
+        .st-chart-flex { display: flex; flex-wrap: wrap; gap: 2rem; margin-bottom: 2rem; }
+        .st-text-flex { display: flex; flex-wrap: wrap; gap: 2rem; margin-bottom: 3rem; }
+        .st-flex-between { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        
+        /* Legend */
+        .legend-item { display: flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: #6b7280; }
+        .legend-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+        const { BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } = window.Recharts;
+
+        // --- Icons ---
+        const Icon = ({ children, className, style }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>{children}</svg>
+        );
+        const UserCheck = (p) => <Icon {...p}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></Icon>;
+        const Smile = (p) => <Icon {...p}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></Icon>;
+        const CheckCircle = (p) => <Icon {...p}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></Icon>;
+        const Scale = (p) => <Icon {...p}><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></Icon>;
+        const Loader2 = (p) => <Icon {...p} className={`animate-spin ${p.className}`}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></Icon>;
+        const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9"/></Icon>;
+        const FileText = (p) => <Icon {...p}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></Icon>;
+        const MessageSquare = (p) => <Icon {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></Icon>;
+
+        // --- Config ---
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec";
+
+        const QUESTIONS = {
+            Q1: "1. 考試內容來自於平日所學內容",
+            Q2: "2. 試場各項標示與移動路線規劃清楚、合宜",
+            Q3: "3. 試題指引內容清楚、訊息足夠",
+            Q4: "4. SP測驗站考試時間(8 mins)長短合宜",
+            Q5: "5. SP測驗站考試難度合宜",
+            Q6: "6. 各站SP的演出皆像是真實病人",
+            Q7: "7. 技能測驗站考試時間(8 mins)長短合宜",
+            Q8: "8. 技能測驗站考試難度合宜",
+            Q9: "9. 試務運作流程順暢、紀律良好"
+        };
+
+        const THEME = {
+            blue: '#3b82f6',
+            green: '#10b981',
+            purple: '#8b5cf6',
+            yellow: '#f59e0b',
+            red: '#ef4444',
+            bg: '#f3f4f6',
+            white: '#ffffff',
+            textMain: '#1f2937',
+            textSub: '#6b7280',
+            border: '#e5e7eb',
+            bgBlue: '#eff6ff',
+            bgGreen: '#ecfdf5',
+            bgPurple: '#f5f3ff',
+            bgYellow: '#fffbeb',
+        };
+
+        const SCALE_COLORS = {
+            5: '#2563eb', // 非常同意 (Blue 600)
+            4: '#60a5fa', // 同意 (Blue 400)
+            3: '#94a3b8', // 普通/無意見 (Slate 400)
+            2: '#fb923c', // 不同意 (Orange 400)
+            1: '#ef4444'  // 非常不同意 (Red 500)
+        };
+
+        const DIFFICULTY_MAP = {
+            1: "非常簡單", 2: "簡單", 3: "剛好", 4: "困難", 5: "非常困難"
+        };
+        const DIFFICULTY_COLORS = ['#22c55e', '#3b82f6', '#eab308', '#f97316', '#ef4444'];
+
+        // --- Components ---
+
+        const KpiCard = ({ title, value, icon: Icon, iconBg, iconColor }) => (
+            <div className="st-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.5rem', marginBottom: 0 }}>
+                <div>
+                    <p style={{ fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, textTransform: 'uppercase', marginBottom: '0.25rem' }}>{title}</p>
+                    <p style={{ fontSize: '1.875rem', fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>{value}</p>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '9999px', backgroundColor: iconBg }}>
+                    <Icon style={{ width: '1.5rem', height: '1.5rem', color: iconColor }} />
+                </div>
+            </div>
+        );
+        
+        const StackedBarRow = ({ label, data, total }) => (
+            <div style={{ marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '0.5rem' }}>
+                    <h4 style={{ fontSize: '0.875rem', fontWeight: '500', color: THEME.textMain, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '85%' }} title={label}>{label}</h4>
+                </div>
+                <div style={{ height: '1rem', width: '100%', display: 'flex', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#e5e7eb' }}>
+                    {[5, 4, 3, 2, 1].map(score => {
+                        const count = data[score] || 0;
+                        const pct = total ? (count / total) * 100 : 0;
+                        if (pct === 0) return null;
+                        return (
+                            <div key={score} style={{ width: `${pct}%`, backgroundColor: SCALE_COLORS[score], height: '100%' }} 
+                                 title={`${score}分: ${count}人`}>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+
+        // --- Main App ---
+
+        function StudentDashboard() {
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [filterDate, setFilterDate] = useState('All');
+
+            useEffect(() => {
+                setLoading(true);
+                const fetchData = async () => {
+                    try {
+                        const response = await fetch(GOOGLE_SCRIPT_URL);
+                        if (!response.ok) throw new Error('Network response failed');
+                        const json = await response.json();
+                        const list = json.student || [];
+                        const cleanList = list.map(d => ({
+                            ...d,
+                            q1: parseInt(d.q1)||0, q2: parseInt(d.q2)||0, q3: parseInt(d.q3)||0,
+                            q4: parseInt(d.q4)||0, q5: parseInt(d.q5)||0, q6: parseInt(d.q6)||0,
+                            q7: parseInt(d.q7)||0, q8: parseInt(d.q8)||0, q9: parseInt(d.q9)||0,
+                            q10: parseInt(d.q10)||0,
+                            q11: d.q11 || "", q12: d.q12 || ""
+                        }));
+                        setData(cleanList);
+                        setLoading(false);
+                    } catch (err) {
+                        console.error(err);
+                        setError("無法讀取資料，請確認 GAS 部署網址是否正確");
+                        setLoading(false);
+                    }
+                };
+                fetchData();
+            }, []);
+
+            const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
+            const filtered = useMemo(() => data.filter(d => filterDate === 'All' || d.date === filterDate), [data, filterDate]);
+
+            const stats = useMemo(() => {
+                const count = filtered.length;
+                if (count === 0) return { count: 0, avg: 0, spRealism: 0, hardPct: 0 };
+
+                let sum = 0, items = 0;
+                ['q1','q2','q3','q4','q5','q6','q7','q8','q9'].forEach(q => {
+                    sum += filtered.reduce((acc, cur) => acc + cur[q], 0);
+                    items += count;
+                });
+                
+                const spSum = filtered.reduce((acc, cur) => acc + cur.q6, 0);
+                const hardCount = filtered.filter(d => d.q10 >= 4).length;
+
+                return {
+                    count,
+                    avg: items ? (sum / items).toFixed(1) : 0,
+                    spRealism: (spSum / count).toFixed(1),
+                    hardPct: Math.round((hardCount / count) * 100)
+                };
+            }, [filtered]);
+
+            const barData = useMemo(() => {
+                return Object.keys(QUESTIONS).map(k => {
+                    const qId = k.toLowerCase();
+                    const counts = {1:0, 2:0, 3:0, 4:0, 5:0};
+                    filtered.forEach(d => {
+                        const s = d[qId];
+                        if(counts[s] !== undefined) counts[s]++;
+                    });
+                    return { key: k, label: QUESTIONS[k], ...counts, total: filtered.length };
+                });
+            }, [filtered]);
+
+            const pieData = useMemo(() => {
+                const counts = {1:0, 2:0, 3:0, 4:0, 5:0};
+                filtered.forEach(d => {
+                    if(counts[d.q10] !== undefined) counts[d.q10]++;
+                });
+                return Object.keys(counts).map(k => ({
+                    name: DIFFICULTY_MAP[k],
+                    value: counts[k]
+                })).filter(d => d.value > 0);
+            }, [filtered]);
+
+            const feedbackQ11 = useMemo(() => filtered.filter(d => d.q11 && d.q11.trim() !== "").map(d => ({ text: d.q11, date: d.date })), [filtered]);
+            const feedbackQ12 = useMemo(() => filtered.filter(d => d.q12 && d.q12.trim() !== "").map(d => ({ text: d.q12, date: d.date })), [filtered]);
+
+            const inputStyle = {
+                width: '100%',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: '#f9fafb',
+                border: `1px solid ${THEME.border}`,
+                borderRadius: '0.375rem',
+                appearance: 'none',
+                outline: 'none',
+                fontSize: '0.875rem',
+                color: THEME.textMain
+            };
+
+            return (
+                <div style={{ minHeight: '100vh', paddingBottom: '3rem' }}>
+                    {/* Header */}
+                    <div style={{ backgroundColor: THEME.white, borderBottom: `1px solid ${THEME.border}`, position: 'sticky', top: 0, zIndex: 30, marginBottom: '2rem', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                        <div className="st-container" style={{ height: '4rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div style={{ padding: '0.5rem', borderRadius: '0.5rem', backgroundColor: THEME.blue, display: 'flex' }}>
+                                    <UserCheck style={{color:'white', width:20, height:20}} />
+                                </div>
+                                <h1 style={{ fontWeight: 'bold', fontSize: '1.25rem', color: THEME.textMain, margin: 0 }}>考生回饋分析儀表板</h1>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', backgroundColor: THEME.bg, padding: '0.25rem 0.75rem', borderRadius: '9999px', color: THEME.textSub }}>v2.2 (Fix Legend & Remove Cloud)</div>
+                        </div>
+                    </div>
+
+                    <div className="st-container">
+                        {loading && <div style={{ textAlign: 'center', padding: '5rem 0', color: THEME.textSub, display: 'flex', flexDirection: 'column', alignItems: 'center' }}><Loader2 style={{ marginBottom: '0.5rem', color: THEME.blue }} />讀取資料中...</div>}
+                        {error && <div style={{ backgroundColor: '#fee2e2', color: '#b91c1c', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>{error}</div>}
+
+                        {!loading && !error && (
+                            <>
+                                {/* Filter */}
+                                <div className="st-card" style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+                                    <div style={{ width: '100%', maxWidth: '250px' }}>
+                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, textTransform: 'uppercase', marginBottom: '0.5rem' }}>選擇日期</label>
+                                        <div style={{ position: 'relative' }}>
+                                            <select style={inputStyle} value={filterDate} onChange={e=>setFilterDate(e.target.value)}>
+                                                <option value="All">所有日期</option>
+                                                {dates.map(d=><option key={d} value={d}>{d}</option>)}
+                                            </select>
+                                            <ChevronDown style={{position:'absolute', right:'0.75rem', top:'0.75rem', width:16, color:'#9ca3af', pointerEvents:'none'}} />
+                                        </div>
+                                    </div>
+                                    <div style={{ marginLeft: 'auto', fontSize: '0.875rem', color: THEME.textSub, paddingBottom: '0.5rem' }}>共 <span style={{ fontWeight: 'bold', color: THEME.blue }}>{stats.count}</span> 份回饋</div>
+                                </div>
+
+                                {/* KPIs */}
+                                <div className="st-grid-4">
+                                    <KpiCard title="考生回饋數" value={stats.count} icon={UserCheck} iconBg={THEME.bgBlue} iconColor={THEME.blue} />
+                                    <KpiCard title="整體滿意度 (Q1-Q9)" value={`${stats.avg} / 5`} icon={Smile} iconBg={THEME.bgGreen} iconColor={THEME.green} />
+                                    <KpiCard title="SP 擬真度 (Q6)" value={`${stats.spRealism} / 5`} icon={CheckCircle} iconBg={THEME.bgPurple} iconColor={THEME.purple} />
+                                    <KpiCard title="覺得困難比例 (Q10)" value={`${stats.hardPct}%`} icon={Scale} iconBg={THEME.bgYellow} iconColor={THEME.yellow} />
+                                </div>
+
+                                {/* Charts Grid */}
+                                <div className="st-chart-flex">
+                                    {/* Left: Stacked Bar */}
+                                    <div className="st-card" style={{ flex: '2 1 500px', marginBottom: 0 }}>
+                                        <div className="st-flex-between" style={{ marginBottom: '1.5rem', borderBottom: `1px solid ${THEME.border}`, paddingBottom: '1rem' }}>
+                                            <h2 style={{ fontSize: '1.125rem', fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>問卷回饋分佈 (Q1-Q9)</h2>
+                                            {/* 完整圖例 (5個選項) */}
+                                            <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: THEME.textSub, flexWrap: 'wrap' }}>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCALE_COLORS[5]}}></div>非常同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCALE_COLORS[4]}}></div>同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCALE_COLORS[3]}}></div>普通</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCALE_COLORS[2]}}></div>不同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCALE_COLORS[1]}}></div>非常不同意</div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            {barData.map(d => <StackedBarRow key={d.key} label={d.label} data={d} total={d.total} />)}
+                                        </div>
+                                    </div>
+
+                                    {/* Right: Pie Chart Only (Word Cloud Removed) */}
+                                    <div className="st-card" style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', marginBottom: 0, minHeight: '350px' }}>
+                                        <h2 style={{ fontSize: '1rem', fontWeight: 'bold', color: THEME.textMain, margin: '0 0 1rem 0', textAlign: 'center' }}>Q10. 難度感受</h2>
+                                        <div style={{ flex: 1 }}>
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Pie
+                                                        data={pieData}
+                                                        cx="50%" cy="50%"
+                                                        innerRadius={60} outerRadius={80}
+                                                        paddingAngle={5}
+                                                        dataKey="value"
+                                                    >
+                                                        {pieData.map((entry, index) => (
+                                                            <Cell key={`cell-${index}`} fill={DIFFICULTY_COLORS[index % DIFFICULTY_COLORS.length]} />
+                                                        ))}
+                                                    </Pie>
+                                                    <Tooltip />
+                                                    <Legend verticalAlign="bottom" height={36}/>
+                                                </PieChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Text Feedback Grid */}
+                                <div className="st-text-flex">
+                                    {/* Q11 */}
+                                    <div className="st-card" style={{ flex: '1 1 300px', padding: 0, overflow: 'hidden', height: '500px', display: 'flex', flexDirection: 'column', marginBottom: 0 }}>
+                                        <div style={{ padding: '1rem', borderBottom: `1px solid ${THEME.border}`, backgroundColor: THEME.bgBlue, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <FileText style={{color:THEME.blue, width:20, height:20}} />
+                                            <h3 style={{ fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>Q11. 考題建議</h3>
+                                        </div>
+                                        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+                                            {feedbackQ11.length > 0 ? (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                                    {feedbackQ11.map((c, i) => (
+                                                        <div key={i} style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem', border: `1px solid ${THEME.border}` }}>
+                                                            <p style={{ color: THEME.textMain, marginBottom: '0.5rem', lineHeight: '1.5' }}>{c.text}</p>
+                                                            <span style={{ fontSize: '0.75rem', color: THEME.textSub, backgroundColor: THEME.white, padding: '0.125rem 0.5rem', borderRadius: '0.25rem', border: `1px solid ${THEME.border}` }}>{c.date}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div style={{ textAlign: 'center', color: THEME.textSub, padding: '3rem' }}>無 Q11 回饋</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Q12 */}
+                                    <div className="st-card" style={{ flex: '1 1 300px', padding: 0, overflow: 'hidden', height: '500px', display: 'flex', flexDirection: 'column', marginBottom: 0 }}>
+                                        <div style={{ padding: '1rem', borderBottom: `1px solid ${THEME.border}`, backgroundColor: THEME.bgGreen, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <MessageSquare style={{color:THEME.green, width:20, height:20}} />
+                                            <h3 style={{ fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>Q12. OSCE 整體建議</h3>
+                                        </div>
+                                        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+                                            {feedbackQ12.length > 0 ? (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                                    {feedbackQ12.map((c, i) => (
+                                                        <div key={i} style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem', border: `1px solid ${THEME.border}` }}>
+                                                            <p style={{ color: THEME.textMain, marginBottom: '0.5rem', lineHeight: '1.5' }}>{c.text}</p>
+                                                            <span style={{ fontSize: '0.75rem', color: THEME.textSub, backgroundColor: THEME.white, padding: '0.125rem 0.5rem', borderRadius: '0.25rem', border: `1px solid ${THEME.border}` }}>{c.date}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div style={{ textAlign: 'center', color: THEME.textSub, padding: '3rem' }}>無 Q12 回饋</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<StudentDashboard />);
+    </script>
+</body>
+</html>
