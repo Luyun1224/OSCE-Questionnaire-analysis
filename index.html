@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考官回饋儀表板</title>
+    
+    <!-- Tailwind CSS (僅作 Reset) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & Recharts -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+
+    <style>
+        body { background-color: #f8fafc; font-family: "Microsoft JhengHei", sans-serif; margin: 0; padding: 0; }
+        * { box-sizing: border-box; }
+        
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        /* CSS Utilities */
+        .ex-container { max-width: 1200px; margin: 0 auto; padding: 0 1rem; }
+        .ex-card { background: white; border-radius: 0.75rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; padding: 1.5rem; margin-bottom: 2rem; }
+        .ex-grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        .ex-flex-between { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        
+        /* Legend Style */
+        .legend-item { display: flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: #6b7280; }
+        .legend-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+        const { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } = window.Recharts;
+
+        // --- Icons ---
+        const Icon = ({ children, className, style }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>{children}</svg>
+        );
+        const Award = (p) => <Icon {...p}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></Icon>;
+        const ClipboardList = (p) => <Icon {...p}><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></Icon>;
+        const Star = (p) => <Icon {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></Icon>;
+        const TrendingDown = (p) => <Icon {...p}><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></Icon>;
+        const Loader2 = (p) => <Icon {...p} style={{animation: 'spin 1s linear infinite', ...p.style}}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></Icon>;
+        const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9"/></Icon>;
+        const MessageSquare = (p) => <Icon {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></Icon>;
+        const Users = (p) => <Icon {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></Icon>;
+
+        // --- Config ---
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
+
+        const QUESTION_MAPPING = {
+            Q1: "1. 測驗內容及其難度合宜",
+            Q2: "2. 評核表評分項目合宜",
+            Q3: "3. 評分說明內容清楚、合宜",
+            Q4: "4. 試題指引內容足夠",
+            Q5: "5. 測驗時間(8 mins)長短合宜",
+            Q6: "6. 試場各項標示、移動路線規劃清楚、合宜",
+            Q7: "7. 試場各項鈴聲、廣播清楚、合宜",
+            Q8: "8. 試務運作流程順暢、試務人員紀律良好",
+        };
+
+        const THEME = {
+            primary: '#2563eb', 
+            primaryBg: '#eff6ff',
+            textMain: '#1f2937', 
+            textSub: '#6b7280',
+            border: '#e5e7eb',
+            success: '#16a34a', successBg: '#f0fdf4',
+            danger: '#dc2626', dangerBg: '#fef2f2',
+        };
+
+        const SCORE_COLOR_MAP = {
+            5: '#3b82f6', // 非常同意
+            4: '#60a5fa', // 同意
+            3: '#9ca3af', // 無意見
+            2: '#fdba74', // 不同意
+            1: '#ef4444'  // 非常不同意
+        };
+
+        // 考官專屬關注詞彙 (用於動態掃描)
+        const WATCH_WORDS = [
+            "口罩", "手套", "X光", "評分表", "難度", "流程", "動線", "鈴聲", "SP", "時間", "午餐", "感謝", 
+            "指引", "教案", "設備", "空間", "隔離", "防護", "引導", "廣播", "休息", "太趕", "不足"
+        ];
+
+        const parseScore = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            const parsed = parseFloat(String(val).replace(/[^0-9.]/g, '')); 
+            return isNaN(parsed) ? 0 : parsed;
+        };
+
+        // --- Components ---
+
+        const StatCard = ({ title, value, subtitle, icon: Icon, color, bg }) => (
+            <div className="ex-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 0 }}>
+                <div>
+                    <h3 style={{ fontSize: '0.75rem', fontWeight: '700', textTransform: 'uppercase', color: THEME.textSub, marginBottom: '0.25rem' }}>{title}</h3>
+                    <div style={{ fontSize: '1.875rem', fontWeight: '700', color: THEME.textMain }}>{value}</div>
+                    {subtitle && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: THEME.textSub }}>{subtitle}</div>}
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '9999px', backgroundColor: bg }}>
+                    <Icon style={{ width: '1.5rem', height: '1.5rem', color: color }} />
+                </div>
+            </div>
+        );
+
+        // --- 美化版文字雲 ---
+        const WordCloud = ({ data }) => {
+            if (!data || data.length === 0) {
+                return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: THEME.textSub, fontSize: '0.875rem', minHeight: '200px' }}>無足夠文字資料產生詞雲</div>;
+            }
+            
+            // 隨機樣式生成器
+            const getRandomStyle = (val) => {
+                // 大小：根據頻率 (value) 決定，最小 12px，最大 32px
+                const size = Math.min(12 + val * 4, 32); 
+                // 顏色：藍色系隨機
+                const colors = ['#1e40af', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd'];
+                const color = colors[Math.min(val, 5)]; 
+                // 旋轉：輕微隨機角度 (-5度 ~ 5度)，增加自然感
+                const rotate = Math.random() * 10 - 5;
+
+                return {
+                    fontSize: `${size}px`,
+                    color: color,
+                    transform: `rotate(${rotate}deg)`,
+                    margin: '0.25rem 0.5rem',
+                    fontWeight: 'bold',
+                    cursor: 'default',
+                    display: 'inline-block',
+                    transition: 'transform 0.2s',
+                };
+            };
+
+            return (
+                <div style={{ 
+                    display: 'flex', 
+                    flexWrap: 'wrap', 
+                    padding: '1.5rem', 
+                    justifyContent: 'center', 
+                    alignItems: 'center', 
+                    minHeight: '200px', 
+                    alignContent: 'center' 
+                }}>
+                    {data.map((word, idx) => (
+                    <span 
+                        key={idx} 
+                        style={getRandomStyle(word.value)} 
+                        title={`${word.text}: ${word.value}次`}
+                        onMouseEnter={(e) => e.target.style.transform = 'scale(1.2)'}
+                        onMouseLeave={(e) => e.target.style.transform = `rotate(${Math.random() * 10 - 5}deg)`}
+                    >
+                        {word.text}
+                    </span>
+                    ))}
+                </div>
+            );
+        };
+
+        const StackedBarRow = ({ label, data, total }) => (
+            <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.5rem' }}>
+                    <h4 style={{ fontSize: '0.875rem', fontWeight: '500', flex: 1, marginRight: '1rem', color: THEME.textMain }}>{label}</h4>
+                    <span style={{ fontSize: '0.75rem', color: THEME.textSub }}>N={total}</span>
+                </div>
+                <div style={{ height: '1.5rem', width: '100%', display: 'flex', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#f1f5f9' }}>
+                    {[5, 4, 3, 2, 1].map((score) => {
+                        const count = data[score] || 0;
+                        const pct = total ? (count / total) * 100 : 0;
+                        if (pct === 0) return null;
+                        return (
+                            <div key={score} style={{ width: `${pct}%`, backgroundColor: SCORE_COLOR_MAP[score], height: '100%' }} 
+                                 title={`${score}分: ${count}人 (${pct.toFixed(1)}%)`}></div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+
+        // --- Main ---
+
+        function ExaminerDashboard() {
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [filterDate, setFilterDate] = useState('All');
+            const [filterStation, setFilterStation] = useState('All');
+
+            useEffect(() => {
+                setLoading(true);
+                fetch(GOOGLE_SCRIPT_URL)
+                    .then(res => res.json())
+                    .then(json => {
+                        const rawList = json.examiner || [];
+                        const formatted = rawList.map(d => ({
+                            ...d,
+                            station: parseInt(d.station) || d.station,
+                            q1: parseScore(d.q1), q2: parseScore(d.q2), q3: parseScore(d.q3),
+                            q4: parseScore(d.q4), q5: parseScore(d.q5), q6: parseScore(d.q6),
+                            q7: parseScore(d.q7), q8: parseScore(d.q8),
+                            q9: d.q9 || "", q10: d.q10 || ""
+                        }));
+                        setData(formatted);
+                        setLoading(false);
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        setError("無法讀取資料");
+                        setLoading(false);
+                    });
+            }, []);
+
+            const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
+            const stations = useMemo(() => ['All', ...new Set(data.map(d => d.station))].sort((a, b) => a - b), [data]);
+            
+            const filtered = useMemo(() => {
+                return data.filter(d => {
+                    const dateMatch = filterDate === 'All' || d.date === filterDate;
+                    const stMatch = filterStation === 'All' || d.station === (filterStation === 'All' ? d.station : parseInt(filterStation));
+                    return dateMatch && stMatch;
+                });
+            }, [data, filterDate, filterStation]);
+
+            // 動態文字雲
+            const wordCloudData = useMemo(() => {
+                const counts = {};
+                filtered.forEach(item => {
+                    const text = (item.q9 + " " + item.q10).toLowerCase();
+                    WATCH_WORDS.forEach(word => {
+                        if (text.includes(word)) counts[word] = (counts[word] || 0) + 1;
+                    });
+                });
+                return Object.keys(counts).map(k => ({ text: k, value: counts[k] })).sort((a, b) => b.value - a.value).filter(i => i.value > 0);
+            }, [filtered]);
+
+            const stats = useMemo(() => {
+                const count = filtered.length;
+                if (count === 0) return { count: 0, avg: 0, itemsToImprove: 0 };
+                
+                let sum = 0, items = 0, improve = 0;
+                for(let i=1; i<=8; i++) {
+                    const qSum = filtered.reduce((acc, cur) => acc + (cur[`q${i}`] || 0), 0);
+                    const qAvg = count ? qSum / count : 0;
+                    sum += qSum; items += count;
+                    if (qAvg < 3.5) improve++;
+                }
+                return { count, avg: items ? (sum / items).toFixed(1) : 0, itemsToImprove: improve };
+            }, [filtered]);
+
+            const distData = useMemo(() => {
+                return Object.keys(QUESTION_MAPPING).map(k => {
+                    const qId = k.toLowerCase();
+                    const counts = {1:0, 2:0, 3:0, 4:0, 5:0};
+                    filtered.forEach(d => { const s = Math.round(d[qId]); if(counts[s]!==undefined) counts[s]++; });
+                    return { name: QUESTION_MAPPING[k], shortName: k, ...counts, total: filtered.length };
+                });
+            }, [filtered]);
+
+            const radarData = useMemo(() => {
+                const arr = [];
+                for(let i=1; i<=8; i++) {
+                    const key = `q${i}`;
+                    const sum = filtered.reduce((acc, cur) => acc + (cur[key]||0), 0);
+                    const avg = filtered.length ? (sum / filtered.length).toFixed(2) : 0;
+                    arr.push({ subject: `Q${i}`, A: parseFloat(avg), fullMark: 5 });
+                }
+                return arr;
+            }, [filtered]);
+
+            const fbQ9 = useMemo(() => filtered.filter(d => d.q9).map(d => ({...d, text: d.q9})), [filtered]);
+            const fbQ10 = useMemo(() => filtered.filter(d => d.q10).map(d => ({...d, text: d.q10})), [filtered]);
+
+            const inputStyle = { width: '100%', padding: '0.5rem', backgroundColor: '#f9fafb', border: `1px solid ${THEME.border}`, borderRadius: '0.375rem', appearance: 'none' };
+
+            return (
+                <div style={{ minHeight: '100vh', paddingBottom: '3rem' }}>
+                    {/* Header */}
+                    <div style={{ background: 'white', borderBottom: `1px solid ${THEME.border}`, position: 'sticky', top: 0, zIndex: 30, marginBottom: '2rem' }}>
+                        <div className="ex-container" style={{ height: '4rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div style={{ padding: '0.5rem', borderRadius: '0.5rem', backgroundColor: THEME.primary, display: 'flex' }}><Award style={{color:'white', width:20, height:20}} /></div>
+                                <h1 style={{ fontWeight: '700', fontSize: '1.25rem', color: THEME.textMain, margin: 0 }}>考官回饋分析儀表板</h1>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', backgroundColor: '#f9fafb', padding: '0.25rem 0.75rem', borderRadius: '9999px', border: `1px solid ${THEME.border}`, color: THEME.textSub }}>v5.1 (Final Cloud Fix)</div>
+                        </div>
+                    </div>
+
+                    <div className="ex-container">
+                        {loading && <div style={{ textAlign: 'center', padding: '5rem 0', color: THEME.textSub }}><Loader2 style={{margin:'0 auto 1rem', color: THEME.primary}} />讀取資料中...</div>}
+                        {error && <div style={{ padding: '1rem', background: THEME.dangerBg, color: '#b91c1c', borderRadius: '0.5rem', textAlign: 'center' }}>{error}</div>}
+
+                        {!loading && !error && (
+                            <>
+                                {/* Filter */}
+                                <div className="ex-card">
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'end' }}>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, marginBottom: '0.25rem' }}>選擇日期</label>
+                                            <div style={{ position: 'relative' }}>
+                                                <select style={inputStyle} value={filterDate} onChange={e=>setFilterDate(e.target.value)}>
+                                                    <option value="All">全部日期</option>
+                                                    {dates.map(d=><option key={d} value={d}>{d}</option>)}
+                                                </select>
+                                                <ChevronDown style={{position:'absolute', right:'0.5rem', top:'0.75rem', width:16, color:'#9ca3af', pointerEvents:'none'}}/>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, marginBottom: '0.25rem' }}>選擇站號</label>
+                                            <div style={{ position: 'relative' }}>
+                                                <select style={inputStyle} value={filterStation} onChange={e=>setFilterStation(e.target.value)}>
+                                                    <option value="All">全部站號</option>
+                                                    {stations.map(s=><option key={s} value={s}>第 {s} 站</option>)}
+                                                </select>
+                                                <ChevronDown style={{position:'absolute', right:'0.5rem', top:'0.75rem', width:16, color:'#9ca3af', pointerEvents:'none'}}/>
+                                            </div>
+                                        </div>
+                                        <div style={{ textAlign: 'right', paddingBottom: '0.5rem' }}>
+                                            <span style={{ fontSize: '0.875rem', fontWeight: '500', padding: '0.25rem 0.75rem', borderRadius: '9999px', backgroundColor: THEME.primaryBg, color: THEME.primary }}>共 {stats.count} 份</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* KPIs */}
+                                <div className="ex-grid-3">
+                                    <StatCard title="總回饋數" value={stats.count} icon={ClipboardList} color={THEME.primary} bg={THEME.primaryBg} />
+                                    <StatCard title="整體滿意度" value={`${stats.avg} / 5`} icon={Star} color={THEME.success} bg={THEME.successBg} />
+                                    <StatCard title="待改進項目" value={stats.itemsToImprove} subtitle="< 3.5分" icon={TrendingDown} color={THEME.danger} bg={THEME.dangerBg} />
+                                </div>
+
+                                {/* Charts */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                                    {/* Stacked Bar */}
+                                    <div className="ex-card" style={{ gridColumn: 'span 2' }}>
+                                        <div className="ex-flex-between" style={{ marginBottom: '1.5rem', borderBottom: `1px solid ${THEME.border}`, paddingBottom: '1rem' }}>
+                                            <h2 style={{ fontSize: '1.125rem', fontWeight: 'bold', color: THEME.textMain, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><ClipboardList color={THEME.primary} size={20} /> 回饋分佈</h2>
+                                            {/* 修復：完整圖例 */}
+                                            <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: THEME.textSub, flexWrap: 'wrap' }}>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCORE_COLOR_MAP[5]}}></div>非常同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCORE_COLOR_MAP[4]}}></div>同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCORE_COLOR_MAP[3]}}></div>無意見</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCORE_COLOR_MAP[2]}}></div>不同意</div>
+                                                <div class="legend-item"><div class="legend-dot" style={{background:SCORE_COLOR_MAP[1]}}></div>非常不同意</div>
+                                            </div>
+                                        </div>
+                                        {distData.map(d => <StackedBarRow key={d.shortName} label={d.name} data={d} total={d.total} />)}
+                                    </div>
+
+                                    {/* Right Col */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                        {/* Radar */}
+                                        <div className="ex-card" style={{ flex: 1, minHeight: '300px', display: 'flex', flexDirection: 'column' }}>
+                                            <h2 style={{ fontSize: '0.875rem', fontWeight: 'bold', textAlign: 'center', color: THEME.textSub, marginBottom: '0.5rem' }}>整體雷達圖</h2>
+                                            <div style={{ flex: 1 }}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                                                        <PolarGrid stroke={THEME.border} />
+                                                        <PolarAngleAxis dataKey="subject" tick={{ fill: THEME.primary, fontSize: 10, fontWeight: 'bold' }} />
+                                                        <PolarRadiusAxis angle={30} domain={[0, 5]} tick={false} axisLine={false} />
+                                                        <Radar name="Score" dataKey="A" stroke={THEME.primary} strokeWidth={2} fill={THEME.primary} fillOpacity={0.4} />
+                                                        <Tooltip />
+                                                    </RadarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        </div>
+                                        {/* Word Cloud */}
+                                        <div className="ex-card" style={{ minHeight: '200px' }}>
+                                            <h2 style={{ fontSize: '1rem', fontWeight: 'bold', color: THEME.textMain, marginBottom: '0.5rem' }}>關鍵字詞雲</h2>
+                                            <WordCloud data={wordCloudData} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Feedback Text */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem' }}>
+                                    {/* Q9 */}
+                                    <div className="ex-card" style={{ padding: 0, overflow: 'hidden', height: '500px', display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ padding: '1rem', background: '#f9fafb', borderBottom: `1px solid ${THEME.border}`, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <MessageSquare color={THEME.primary} size={20} />
+                                            <h3 style={{ fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>Q9. 考題建議</h3>
+                                        </div>
+                                        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+                                            {fbQ9.length > 0 ? fbQ9.map((c, i) => (
+                                                <div key={i} style={{ paddingBottom: '1rem', marginBottom: '1rem', borderBottom: `1px solid ${THEME.border}` }}>
+                                                    <p style={{ color: THEME.textMain, marginBottom: '0.5rem', lineHeight: 1.5 }}>{c.text}</p>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem', color: THEME.textSub }}>
+                                                        <span>{c.examiner}</span>|<span>第{c.station}站</span>|<span>{c.date}</span>
+                                                    </div>
+                                                </div>
+                                            )) : <div style={{ textAlign: 'center', color: THEME.textSub, padding: '2rem' }}>無文字回饋</div>}
+                                        </div>
+                                    </div>
+                                    {/* Q10 */}
+                                    <div className="ex-card" style={{ padding: 0, overflow: 'hidden', height: '500px', display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ padding: '1rem', background: '#f0fdf4', borderBottom: `1px solid ${THEME.border}`, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <MessageSquare color={THEME.success} size={20} />
+                                            <h3 style={{ fontWeight: 'bold', color: THEME.textMain, margin: 0 }}>Q10. 整體建議</h3>
+                                        </div>
+                                        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+                                            {fbQ10.length > 0 ? fbQ10.map((c, i) => (
+                                                <div key={i} style={{ paddingBottom: '1rem', marginBottom: '1rem', borderBottom: `1px solid ${THEME.border}` }}>
+                                                    <p style={{ color: THEME.textMain, marginBottom: '0.5rem', lineHeight: 1.5 }}>{c.text}</p>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem', color: THEME.textSub }}>
+                                                        <span>{c.examiner}</span>|<span>第{c.station}站</span>|<span>{c.date}</span>
+                                                    </div>
+                                                </div>
+                                            )) : <div style={{ textAlign: 'center', color: THEME.textSub, padding: '2rem' }}>無文字回饋</div>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ExaminerDashboard />);
+    </script>
+</body>
+</html>
