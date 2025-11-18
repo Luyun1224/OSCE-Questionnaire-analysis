@@ -1,486 +1,564 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
-  Tooltip as RechartsTooltip 
-} from 'recharts';
-import { 
-  Filter, MessageSquare, ClipboardList, Calendar, Award, 
-  CheckCircle, AlertCircle, FileText, Users, ChevronDown, Star, TrendingDown, Loader2
-} from 'lucide-react';
-
-// --- 1. 設定與常數 ---
-
-// 已更新為您的 Google Apps Script 網址
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
-
-const QUESTION_MAPPING = {
-  Q1: "1. 測驗內容及其難度合宜",
-  Q2: "2. 評核表評分項目合宜",
-  Q3: "3. 評分說明內容清楚、合宜",
-  Q4: "4. 試題指引內容足夠",
-  Q5: "5. 測驗時間(8 mins)長短合宜",
-  Q6: "6. 試場各項標示、移動路線規劃清楚、合宜",
-  Q7: "7. 試場各項鈴聲、廣播清楚、合宜",
-  Q8: "8. 試務運作流程順暢、試務人員紀律良好",
-};
-
-// 5分量表顏色
-const SCALE_COLORS = {
-  5: '#3b82f6', // Blue 500 - Very Agree
-  4: '#93c5fd', // Blue 300 - Agree
-  3: '#9ca3af', // Gray 400 - Neutral
-  2: '#fdba74', // Orange 300 - Disagree
-  1: '#ef4444'  // Red 500 - Very Disagree
-};
-
-const KEYWORDS = [
-  { text: "口罩", value: 20, color: '#3b82f6' },
-  { text: "手套", value: 15, color: '#ef4444' },
-  { text: "X光", value: 18, color: '#f59e0b' },
-  { text: "評分表", value: 12, color: '#ef4444' },
-  { text: "難度", value: 14, color: '#f97316' },
-  { text: "流程順暢", value: 25, color: '#3b82f6' },
-  { text: "動線", value: 10, color: '#64748b' },
-  { text: "鈴聲", value: 12, color: '#3b82f6' },
-  { text: "SP表現", value: 16, color: '#64748b' },
-  { text: "時間太短", value: 30, color: '#2563eb' },
-  { text: "午餐好吃", value: 8, color: '#9ca3af' },
-  { text: "感謝", value: 22, color: '#3b82f6' },
-];
-
-// --- 2. 子元件 ---
-
-const StatCard = ({ title, value, subtitle, icon: Icon, colorClass, iconBgClass }) => (
-  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-start justify-between">
-    <div>
-      <h3 className="text-gray-500 text-sm font-medium mb-1">{title}</h3>
-      <div className="text-3xl font-bold text-gray-800">{value}</div>
-      {subtitle && <div className="text-sm text-gray-400 mt-1">{subtitle}</div>}
-    </div>
-    <div className={`p-3 rounded-full ${iconBgClass}`}>
-      <Icon className={`w-6 h-6 ${colorClass}`} />
-    </div>
-  </div>
-);
-
-const WordCloud = () => (
-  <div className="flex flex-wrap gap-3 p-4 justify-center items-center h-full">
-    {KEYWORDS.map((word, idx) => (
-      <span 
-        key={idx}
-        style={{ 
-          fontSize: `${12 + word.value * 0.8}px`, 
-          color: word.color,
-          opacity: 0.9 
-        }}
-        className="font-bold cursor-default hover:scale-110 transition-transform"
-      >
-        {word.text}
-      </span>
-    ))}
-  </div>
-);
-
-// CSS 堆疊長條圖元件
-const StackedBarRow = ({ label, data, total }) => {
-  return (
-    <div className="mb-6 last:mb-0 group">
-      <div className="flex justify-between items-baseline mb-2">
-        <h4 className="text-sm font-medium text-gray-700 flex-1 mr-4">{label}</h4>
-        <span className="text-xs text-gray-400">N={total}</span>
-      </div>
-      <div className="h-6 w-full flex rounded-full overflow-hidden bg-gray-100 relative">
-        {[5, 4, 3, 2, 1].map((score) => {
-          const count = data[score] || 0;
-          const percentage = total > 0 ? (count / total) * 100 : 0;
-          if (percentage === 0) return null;
-          return (
-            <div
-              key={score}
-              style={{ width: `${percentage}%`, backgroundColor: SCALE_COLORS[score] }}
-              className="h-full transition-all duration-300 hover:brightness-90 relative group/segment"
-              title={`${count}人 (${percentage.toFixed(1)}%)`}
-            >
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover/segment:block bg-gray-800 text-white text-xs py-1 px-2 rounded whitespace-nowrap z-10 opacity-0 group-hover/segment:opacity-100 transition-opacity">
-                {score}分: {count}人 ({percentage.toFixed(0)}%)
-                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-// --- 3. 主應用程式 ---
-
-export default function ExaminerDashboard() {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [filterDate, setFilterDate] = useState('All');
-  const [filterStation, setFilterStation] = useState('All');
-
-  // 從 Google Sheet API 讀取資料
-  useEffect(() => {
-    setLoading(true);
-    fetch(GOOGLE_SCRIPT_URL)
-      .then(response => {
-        if (!response.ok) throw new Error('Network response was not ok');
-        return response.json();
-      })
-      .then(jsonData => {
-        // 簡單的資料型別轉換，確保分數是數字
-        const formattedData = jsonData.map(item => ({
-          ...item,
-          station: parseInt(item.station) || item.station,
-          q1: parseInt(item.q1) || 0,
-          q2: parseInt(item.q2) || 0,
-          q3: parseInt(item.q3) || 0,
-          q4: parseInt(item.q4) || 0,
-          q5: parseInt(item.q5) || 0,
-          q6: parseInt(item.q6) || 0,
-          q7: parseInt(item.q7) || 0,
-          q8: parseInt(item.q8) || 0,
-        }));
-        setData(formattedData);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Fetch error:", err);
-        setError("無法讀取 Google Sheet 資料，請檢查您的網路連線或確認權限是否設定為「所有人 (Anyone)」。");
-        setLoading(false);
-      });
-  }, []);
-
-  // 取得選項
-  const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
-  const stations = useMemo(() => ['All', ...new Set(data.map(d => d.station))].sort((a, b) => a - b), [data]);
-
-  // 篩選數據
-  const filteredData = useMemo(() => {
-    return data.filter(item => {
-      const dateMatch = filterDate === 'All' || item.date === filterDate;
-      const stationMatch = filterStation === 'All' || item.station === (filterStation === 'All' ? item.station : parseInt(filterStation));
-      return dateMatch && stationMatch;
-    });
-  }, [data, filterDate, filterStation]);
-
-  // 計算統計數據 (KPI)
-  const stats = useMemo(() => {
-    const totalCount = filteredData.length;
-    if (totalCount === 0) return { totalCount: 0, avgSatisfaction: 0, itemsToImprove: 0 };
-
-    let totalScoreSum = 0;
-    let totalItems = 0;
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考官回饋儀表板</title>
     
-    filteredData.forEach(item => {
-      for(let i=1; i<=8; i++) {
-        totalScoreSum += (item[`q${i}`] || 0);
-        totalItems++;
-      }
-    });
-    const avgSatisfaction = totalItems ? (totalScoreSum / totalItems).toFixed(1) : 0;
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 1. React Core -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- 2. Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 3. Recharts Dependencies (CRITICAL FIX) -->
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    
+    <!-- 4. Recharts (Stable CDN Version) -->
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
 
-    let itemsToImprove = 0;
-    for(let i=1; i<=8; i++) {
-      const qSum = filteredData.reduce((acc, cur) => acc + (cur[`q${i}`] || 0), 0);
-      const qAvg = totalCount ? (qSum / totalCount) : 0;
-      if(qAvg < 3.5) itemsToImprove++;
-    }
+    <style>
+        body {
+            background-color: #f8fafc; /* slate-50 */
+            font-family: "Microsoft JhengHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-    return { totalCount, avgSatisfaction, itemsToImprove };
-  }, [filteredData]);
-
-  // 準備分佈數據
-  const distributionData = useMemo(() => {
-    if (filteredData.length === 0) return [];
-    const questions = Object.keys(QUESTION_MAPPING); // Q1-Q8
-    return questions.map(key => {
-      const qId = key.toLowerCase(); // q1
-      const counts = { 1:0, 2:0, 3:0, 4:0, 5:0 };
-      
-      filteredData.forEach(item => {
-        const score = item[qId];
-        if(counts[score] !== undefined) counts[score]++;
-      });
-
-      return {
-        name: QUESTION_MAPPING[key],
-        shortName: key,
-        ...counts,
-        total: filteredData.length
-      };
-    });
-  }, [filteredData]);
-
-  // 準備 Radar Chart 數據
-  const radarData = useMemo(() => {
-    if (filteredData.length === 0) return [];
-    const data = [];
-    for(let i=1; i<=8; i++) {
-      const key = `q${i}`;
-      const sum = filteredData.reduce((acc, curr) => acc + (curr[key] || 0), 0);
-      const avg = filteredData.length ? (sum / filteredData.length).toFixed(2) : 0;
-      data.push({ subject: `Q${i}`, A: parseFloat(avg), fullMark: 5 });
-    }
-    return data;
-  }, [filteredData]);
-
-  const feedbackQ9 = useMemo(() => filteredData.filter(d => d.q9).map(d => ({...d, text: d.q9})), [filteredData]);
-  const feedbackQ10 = useMemo(() => filteredData.filter(d => d.q10).map(d => ({...d, text: d.q10})), [filteredData]);
-
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-12">
-      
-      {/* Top Navigation & Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center gap-4">
-              <Award className="w-6 h-6 text-blue-600" />
-              <span className="font-bold text-xl text-gray-800">高階臨床技能測驗 考官回饋分析儀表板</span>
-            </div>
-            <div className="hidden md:flex items-center gap-6 text-sm font-medium">
-              <button className="text-blue-600 border-b-2 border-blue-600 h-full px-2 flex items-center gap-2">
-                <FileText className="w-4 h-4" /> 考官回饋
-              </button>
-              <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2">
-                <Users className="w-4 h-4" /> 標準化病人回饋
-              </button>
-              <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2">
-                <CheckCircle className="w-4 h-4" /> 考生回饋
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
         
-        {/* Error State */}
-        {error && (
-           <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6 rounded-r">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <AlertCircle className="h-5 w-5 text-red-400" aria-hidden="true" />
-              </div>
-              <div className="ml-3">
-                <p className="text-sm text-red-700">{error}</p>
-              </div>
-            </div>
-          </div>
-        )}
+        // Destructure Recharts components from global window object
+        const { 
+            Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
+            Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid 
+        } = window.Recharts;
 
-        {/* Filter Section */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-2">選擇日期</label>
-              <div className="relative">
-                <select 
-                  className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-                  value={filterDate}
-                  onChange={(e) => setFilterDate(e.target.value)}
-                  disabled={loading || data.length === 0}
-                >
-                  <option value="All">全部日期</option>
-                  {dates.filter(d => d !== 'All').map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-2">選擇站號</label>
-              <div className="relative">
-                <select 
-                  className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-                  value={filterStation}
-                  onChange={(e) => setFilterStation(e.target.value)}
-                  disabled={loading || data.length === 0}
-                >
-                  <option value="All">全部站號</option>
-                  {stations.filter(s => s !== 'All').map(s => <option key={s} value={s}>第 {s} 站</option>)}
-                </select>
-                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-2">選擇梯次</label>
-              <div className="relative">
-                <select disabled className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none text-gray-400 cursor-not-allowed">
-                  <option>全部梯次</option>
-                </select>
-                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2" disabled={loading}>
-                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "套用篩選"}
-              </button>
-            </div>
-          </div>
-        </div>
+        // --- Icons (Manual SVG implementation for standalone file) ---
+        const IconWrapper = ({ children, className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+        const Filter = (props) => <IconWrapper {...props}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></IconWrapper>;
+        const MessageSquare = (props) => <IconWrapper {...props}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></IconWrapper>;
+        const ClipboardList = (props) => <IconWrapper {...props}><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></IconWrapper>;
+        const Calendar = (props) => <IconWrapper {...props}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></IconWrapper>;
+        const Award = (props) => <IconWrapper {...props}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></IconWrapper>;
+        const CheckCircle = (props) => <IconWrapper {...props}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></IconWrapper>;
+        const AlertCircle = (props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></IconWrapper>;
+        const FileText = (props) => <IconWrapper {...props}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></IconWrapper>;
+        const Users = (props) => <IconWrapper {...props}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconWrapper>;
+        const ChevronDown = (props) => <IconWrapper {...props}><polyline points="6 9 12 15 18 9"/></IconWrapper>;
+        const Star = (props) => <IconWrapper {...props}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></IconWrapper>;
+        const TrendingDown = (props) => <IconWrapper {...props}><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></IconWrapper>;
+        const Loader2 = (props) => <IconWrapper {...props} className={`${props.className || ''} animate-spin`}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></IconWrapper>;
 
-        {loading ? (
-          <div className="flex flex-col items-center justify-center h-64 text-gray-500">
-            <Loader2 className="w-10 h-10 animate-spin mb-4 text-blue-500" />
-            <p>正在讀取 Google Sheet 資料...</p>
-          </div>
-        ) : data.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-white rounded-xl border border-dashed border-gray-300">
-            <ClipboardList className="w-12 h-12 mb-2 text-gray-300" />
-            <p>目前沒有資料，請確認 Google Sheet 是否有內容</p>
-          </div>
-        ) : (
-          <>
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              <StatCard 
-                title="總回饋筆數" 
-                value={stats.totalCount} 
-                icon={ClipboardList} 
-                colorClass="text-blue-600" 
-                iconBgClass="bg-blue-50"
-              />
-              <StatCard 
-                title="整體滿意度 (平均)" 
-                value={`${stats.avgSatisfaction} / 5`} 
-                icon={Star} 
-                colorClass="text-green-500" 
-                iconBgClass="bg-green-50"
-              />
-              <StatCard 
-                title="待改進項目 (低於3.5分)" 
-                value={stats.itemsToImprove} 
-                icon={TrendingDown} 
-                colorClass="text-red-500" 
-                iconBgClass="bg-red-50"
-              />
-            </div>
 
-            {/* Main Charts Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-              
-              {/* Left: Stacked Bar Chart */}
-              <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                <div className="flex items-center justify-between mb-8 border-b border-gray-100 pb-4">
-                  <h2 className="text-lg font-bold text-gray-800">各項目前回饋分佈 (Q1-Q8)</h2>
-                  <div className="flex gap-3 text-xs text-gray-500 flex-wrap">
-                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[5]}}></div>非常同意</div>
-                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[4]}}></div>同意</div>
-                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[3]}}></div>無意見</div>
-                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[2]}}></div>不同意</div>
-                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[1]}}></div>非常不同意</div>
-                  </div>
+        // --- 1. 設定與常數 ---
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
+
+        const QUESTION_MAPPING = {
+            Q1: "1. 測驗內容及其難度合宜",
+            Q2: "2. 評核表評分項目合宜",
+            Q3: "3. 評分說明內容清楚、合宜",
+            Q4: "4. 試題指引內容足夠",
+            Q5: "5. 測驗時間(8 mins)長短合宜",
+            Q6: "6. 試場各項標示、移動路線規劃清楚、合宜",
+            Q7: "7. 試場各項鈴聲、廣播清楚、合宜",
+            Q8: "8. 試務運作流程順暢、試務人員紀律良好",
+        };
+
+        // 5分量表顏色
+        const SCALE_COLORS = {
+            5: '#3b82f6', // Blue 500 - Very Agree
+            4: '#93c5fd', // Blue 300 - Agree
+            3: '#9ca3af', // Gray 400 - Neutral
+            2: '#fdba74', // Orange 300 - Disagree
+            1: '#ef4444'  // Red 500 - Very Disagree
+        };
+
+        const KEYWORDS = [
+            { text: "口罩", value: 20, color: '#3b82f6' },
+            { text: "手套", value: 15, color: '#ef4444' },
+            { text: "X光", value: 18, color: '#f59e0b' },
+            { text: "評分表", value: 12, color: '#ef4444' },
+            { text: "難度", value: 14, color: '#f97316' },
+            { text: "流程順暢", value: 25, color: '#3b82f6' },
+            { text: "動線", value: 10, color: '#64748b' },
+            { text: "鈴聲", value: 12, color: '#3b82f6' },
+            { text: "SP表現", value: 16, color: '#64748b' },
+            { text: "時間太短", value: 30, color: '#2563eb' },
+            { text: "午餐好吃", value: 8, color: '#9ca3af' },
+            { text: "感謝", value: 22, color: '#3b82f6' },
+        ];
+
+        // 安全解析數字的函式
+        const parseScore = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            const parsed = parseFloat(String(val).replace(/[^0-9.]/g, '')); 
+            return isNaN(parsed) ? 0 : parsed;
+        };
+
+        // --- 2. 子元件 ---
+
+        const StatCard = ({ title, value, subtitle, icon: Icon, colorClass, iconBgClass }) => (
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-start justify-between">
+                <div>
+                    <h3 className="text-gray-500 text-sm font-medium mb-1">{title}</h3>
+                    <div className="text-3xl font-bold text-gray-800">{value}</div>
+                    {subtitle && <div className="text-sm text-gray-400 mt-1">{subtitle}</div>}
                 </div>
-                
-                <div className="space-y-1">
-                  {distributionData.map((item) => (
-                    <StackedBarRow 
-                      key={item.shortName}
-                      label={item.name}
-                      data={item}
-                      total={item.total}
-                    />
-                  ))}
+                <div className={`p-3 rounded-full ${iconBgClass}`}>
+                    <Icon className={`w-6 h-6 ${colorClass}`} />
                 </div>
-              </div>
-
-              {/* Right Column: Radar & Word Cloud */}
-              <div className="flex flex-col gap-8">
-                
-                {/* Radar Chart */}
-                <div className="bg-blue-50 p-6 rounded-xl shadow-sm border border-blue-100 flex-1 min-h-[300px] flex flex-col">
-                  <h2 className="text-lg font-bold text-blue-900 mb-4 text-center">整體滿意度雷達圖 (平均分數)</h2>
-                  <div className="flex-1 relative">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
-                        <PolarGrid stroke="#93c5fd" />
-                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#1e40af', fontSize: 11, fontWeight: 'bold' }} />
-                        <PolarRadiusAxis angle={30} domain={[0, 5]} tick={false} axisLine={false} />
-                        <Radar
-                          name="平均分"
-                          dataKey="A"
-                          stroke="#2563eb"
-                          strokeWidth={3}
-                          fill="#3b82f6"
-                          fillOpacity={0.4}
-                        />
-                        <RechartsTooltip />
-                      </RadarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                {/* Word Cloud */}
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex-1 min-h-[250px]">
-                  <h2 className="text-lg font-bold text-gray-800 mb-2">關鍵字詞雲 (Q9 & Q10)</h2>
-                  <WordCloud />
-                </div>
-
-              </div>
             </div>
+        );
 
-            {/* Text Feedback Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
-                
-                {/* Q9 Feedback */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
-                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
-                        <MessageSquare className="w-5 h-5 text-blue-500" />
-                        <h3 className="text-lg font-bold text-gray-800">Q9. 對於本考題之建議？</h3>
+        const WordCloud = () => (
+            <div className="flex flex-wrap gap-3 p-4 justify-center items-center h-full">
+                {KEYWORDS.map((word, idx) => (
+                    <span 
+                        key={idx}
+                        style={{ 
+                            fontSize: `${12 + word.value * 0.8}px`, 
+                            color: word.color,
+                            opacity: 0.9 
+                        }}
+                        className="font-bold cursor-default hover:scale-110 transition-transform"
+                    >
+                        {word.text}
+                    </span>
+                ))}
+            </div>
+        );
+
+        const StackedBarRow = ({ label, data, total }) => {
+            return (
+                <div className="mb-6 last:mb-0">
+                    <div className="flex justify-between items-baseline mb-2">
+                        <h4 className="text-sm font-medium text-gray-700 flex-1 mr-4">{label}</h4>
+                        <span className="text-xs text-gray-400">N={total}</span>
                     </div>
-                    <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
-                        {feedbackQ9.length > 0 ? feedbackQ9.map((item, idx) => (
-                            <div key={idx} className="py-4 first:pt-0">
-                                <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
-                                <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
-                                    <Users className="w-3 h-3" />
-                                    {item.examiner} 
-                                    <span className="text-gray-300">|</span>
-                                    第{item.station}站
-                                    <span className="text-gray-300">|</span>
-                                    {item.date}
+                    <div className="h-6 w-full flex rounded-full overflow-hidden bg-gray-100 relative">
+                        {[5, 4, 3, 2, 1].map((score) => {
+                            const count = data[score] || 0;
+                            const percentage = total > 0 ? (count / total) * 100 : 0;
+                            if (percentage === 0) return null;
+                            return (
+                                <div
+                                    key={score}
+                                    style={{ width: `${percentage}%`, backgroundColor: SCALE_COLORS[score] }}
+                                    className="h-full relative hover:opacity-80 transition-opacity group"
+                                >
+                                    {/* Tooltip on hover using Tailwind group-hover logic or simple title attribute */}
+                                    <div className="absolute top-0 left-0 w-full h-full" title={`${count}人 (${percentage.toFixed(1)}%)`}></div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 3. 主應用程式 ---
+
+        function ExaminerDashboard() {
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [filterDate, setFilterDate] = useState('All');
+            const [filterStation, setFilterStation] = useState('All');
+
+            // 從 Google Sheet API 讀取資料
+            useEffect(() => {
+                setLoading(true);
+                fetch(GOOGLE_SCRIPT_URL)
+                    .then(response => {
+                        if (!response.ok) throw new Error('Network response was not ok');
+                        return response.json();
+                    })
+                    .then(jsonData => {
+                        // 修正點：檢查是否為新格式 (包含 .examiner) 或舊格式 (直接是 Array)
+                        const rawList = jsonData.examiner ? jsonData.examiner : (Array.isArray(jsonData) ? jsonData : []);
+                        
+                        const formattedData = rawList.map(item => ({
+                            ...item,
+                            station: parseInt(item.station) || item.station,
+                            q1: parseScore(item.q1),
+                            q2: parseScore(item.q2),
+                            q3: parseScore(item.q3),
+                            q4: parseScore(item.q4),
+                            q5: parseScore(item.q5),
+                            q6: parseScore(item.q6),
+                            q7: parseScore(item.q7),
+                            q8: parseScore(item.q8),
+                        }));
+                        setData(formattedData);
+                        setLoading(false);
+                    })
+                    .catch(err => {
+                        console.error("Fetch error:", err);
+                        setError("無法讀取 Google Sheet 資料，請檢查您的網路連線或確認權限是否設定為「所有人 (Anyone)」。");
+                        setLoading(false);
+                    });
+            }, []);
+
+            // 取得選項
+            const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
+            const stations = useMemo(() => ['All', ...new Set(data.map(d => d.station))].sort((a, b) => a - b), [data]);
+
+            // 篩選數據
+            const filteredData = useMemo(() => {
+                return data.filter(item => {
+                    const dateMatch = filterDate === 'All' || item.date === filterDate;
+                    const stationMatch = filterStation === 'All' || item.station === (filterStation === 'All' ? item.station : parseInt(filterStation));
+                    return dateMatch && stationMatch;
+                });
+            }, [data, filterDate, filterStation]);
+
+            // 計算統計數據 (KPI)
+            const stats = useMemo(() => {
+                const totalCount = filteredData.length;
+                if (totalCount === 0) return { totalCount: 0, avgSatisfaction: 0, itemsToImprove: 0 };
+
+                let totalScoreSum = 0;
+                let totalItems = 0;
+                
+                filteredData.forEach(item => {
+                    for(let i=1; i<=8; i++) {
+                        totalScoreSum += (item[`q${i}`] || 0);
+                        totalItems++;
+                    }
+                });
+                const avgSatisfaction = totalItems ? (totalScoreSum / totalItems).toFixed(1) : 0;
+
+                let itemsToImprove = 0;
+                for(let i=1; i<=8; i++) {
+                    const qSum = filteredData.reduce((acc, cur) => acc + (cur[`q${i}`] || 0), 0);
+                    const qAvg = totalCount ? (qSum / totalCount) : 0;
+                    if(qAvg < 3.5) itemsToImprove++;
+                }
+
+                return { totalCount, avgSatisfaction, itemsToImprove };
+            }, [filteredData]);
+
+            // 準備分佈數據
+            const distributionData = useMemo(() => {
+                if (filteredData.length === 0) return [];
+                const questions = Object.keys(QUESTION_MAPPING); // Q1-Q8
+                return questions.map(key => {
+                    const qId = key.toLowerCase(); // q1
+                    const counts = { 1:0, 2:0, 3:0, 4:0, 5:0 };
+                    
+                    filteredData.forEach(item => {
+                        const score = Math.round(item[qId]);
+                        if(counts[score] !== undefined) counts[score]++;
+                    });
+
+                    return {
+                        name: QUESTION_MAPPING[key],
+                        shortName: key,
+                        ...counts,
+                        total: filteredData.length
+                    };
+                });
+            }, [filteredData]);
+
+            // 準備 Radar Chart 數據
+            const radarData = useMemo(() => {
+                if (filteredData.length === 0) return [];
+                const data = [];
+                for(let i=1; i<=8; i++) {
+                    const key = `q${i}`;
+                    const sum = filteredData.reduce((acc, curr) => acc + (curr[key] || 0), 0);
+                    const avg = filteredData.length ? (sum / filteredData.length).toFixed(2) : 0;
+                    data.push({ subject: `Q${i}`, A: parseFloat(avg), fullMark: 5 });
+                }
+                return data;
+            }, [filteredData]);
+
+            const feedbackQ9 = useMemo(() => filteredData.filter(d => d.q9).map(d => ({...d, text: d.q9})), [filteredData]);
+            const feedbackQ10 = useMemo(() => filteredData.filter(d => d.q10).map(d => ({...d, text: d.q10})), [filteredData]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-12">
+                    
+                    {/* Top Navigation & Header */}
+                    <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between h-16">
+                                <div className="flex items-center gap-4">
+                                    <Award className="w-6 h-6 text-blue-600" />
+                                    <span className="font-bold text-xl text-gray-800">高階臨床技能測驗 考官回饋分析儀表板</span>
+                                </div>
+                                <div className="hidden md:flex items-center gap-6 text-sm font-medium">
+                                    <button className="text-blue-600 border-b-2 border-blue-600 h-full px-2 flex items-center gap-2">
+                                        <FileText className="w-4 h-4" /> 考官回饋
+                                    </button>
+                                    <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2 cursor-not-allowed opacity-50" title="請前往獨立的 SP 儀表板頁面">
+                                        <Users className="w-4 h-4" /> 標準化病人回饋
+                                    </button>
+                                    <button className="text-gray-500 hover:text-gray-700 h-full px-2 flex items-center gap-2 cursor-not-allowed opacity-50">
+                                        <CheckCircle className="w-4 h-4" /> 考生回饋
+                                    </button>
                                 </div>
                             </div>
-                        )) : (
-                            <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
-                        )}
+                        </div>
                     </div>
-                </div>
 
-                {/* Q10 Feedback */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
-                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
-                        <MessageSquare className="w-5 h-5 text-green-500" />
-                        <h3 className="text-lg font-bold text-gray-800">Q10. 整體活動建議？</h3>
-                    </div>
-                    <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
-                        {feedbackQ10.length > 0 ? feedbackQ10.map((item, idx) => (
-                            <div key={idx} className="py-4 first:pt-0">
-                                <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
-                                <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
-                                    <Users className="w-3 h-3" />
-                                    {item.examiner} 
-                                    <span className="text-gray-300">|</span>
-                                    第{item.station}站
-                                    <span className="text-gray-300">|</span>
-                                    {item.date}
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+                        
+                        {/* Error State */}
+                        {error && (
+                            <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6 rounded-r">
+                                <div className="flex">
+                                    <div className="flex-shrink-0">
+                                        <AlertCircle className="h-5 w-5 text-red-400" />
+                                    </div>
+                                    <div className="ml-3">
+                                        <p className="text-sm text-red-700">{error}</p>
+                                    </div>
                                 </div>
                             </div>
-                        )) : (
-                            <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
                         )}
+
+                        {/* Filter Section */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-end">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 mb-2">選擇日期</label>
+                                    <div className="relative">
+                                        <select 
+                                            className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                                            value={filterDate}
+                                            onChange={(e) => setFilterDate(e.target.value)}
+                                            disabled={loading || data.length === 0}
+                                        >
+                                            <option value="All">全部日期</option>
+                                            {dates.filter(d => d !== 'All').map(d => <option key={d} value={d}>{d}</option>)}
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 mb-2">選擇站號</label>
+                                    <div className="relative">
+                                        <select 
+                                            className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                                            value={filterStation}
+                                            onChange={(e) => setFilterStation(e.target.value)}
+                                            disabled={loading || data.length === 0}
+                                        >
+                                            <option value="All">全部站號</option>
+                                            {stations.filter(s => s !== 'All').map(s => <option key={s} value={s}>第 {s} 站</option>)}
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 mb-2">選擇梯次</label>
+                                    <div className="relative">
+                                        <select disabled className="w-full pl-3 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg appearance-none text-gray-400 cursor-not-allowed">
+                                            <option>全部梯次</option>
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-3 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2" disabled={loading}>
+                                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "套用篩選"}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {loading ? (
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+                                <Loader2 className="w-10 h-10 animate-spin mb-4 text-blue-500" />
+                                <p>正在讀取 Google Sheet 資料...</p>
+                            </div>
+                        ) : data.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-white rounded-xl border border-dashed border-gray-300">
+                                <ClipboardList className="w-12 h-12 mb-2 text-gray-300" />
+                                <p>目前沒有資料，請確認 Google Sheet 是否有內容</p>
+                            </div>
+                        ) : (
+                            <>
+                                {/* KPI Cards */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                                    <StatCard 
+                                        title="總回饋筆數" 
+                                        value={stats.totalCount} 
+                                        icon={ClipboardList} 
+                                        colorClass="text-blue-600" 
+                                        iconBgClass="bg-blue-50"
+                                    />
+                                    <StatCard 
+                                        title="整體平均滿意度" 
+                                        value={`${stats.avgSatisfaction} / 5`} 
+                                        icon={Star} 
+                                        colorClass="text-green-500" 
+                                        iconBgClass="bg-green-50"
+                                    />
+                                    <StatCard 
+                                        title="待改進項目 (低於3.5分)" 
+                                        value={stats.itemsToImprove} 
+                                        icon={TrendingDown} 
+                                        colorClass="text-red-500" 
+                                        iconBgClass="bg-red-50"
+                                    />
+                                </div>
+
+                                {/* Main Charts Grid */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+                                    
+                                    {/* Left: Stacked Bar Chart */}
+                                    <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                                        <div className="flex items-center justify-between mb-8 border-b border-gray-100 pb-4">
+                                            <h2 className="text-lg font-bold text-gray-800">各項目前回饋分佈 (Q1-Q8)</h2>
+                                            <div className="flex gap-3 text-xs text-gray-500 flex-wrap">
+                                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[5]}}></div>非常同意</div>
+                                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[4]}}></div>同意</div>
+                                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[3]}}></div>無意見</div>
+                                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[2]}}></div>不同意</div>
+                                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full" style={{background: SCALE_COLORS[1]}}></div>非常不同意</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="space-y-1">
+                                            {distributionData.map((item) => (
+                                                <StackedBarRow 
+                                                    key={item.shortName}
+                                                    label={item.name}
+                                                    data={item}
+                                                    total={item.total}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Right Column: Radar & Word Cloud */}
+                                    <div className="flex flex-col gap-8">
+                                        
+                                        {/* Radar Chart */}
+                                        <div className="bg-blue-50 p-6 rounded-xl shadow-sm border border-blue-100 flex-1 flex flex-col" style={{ minHeight: '300px' }}>
+                                            <h2 className="text-lg font-bold text-blue-900 mb-4 text-center">整體滿意度雷達圖 (平均分數)</h2>
+                                            <div className="flex-1 relative">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                                                        <PolarGrid stroke="#93c5fd" />
+                                                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#1e40af', fontSize: 11, fontWeight: 'bold' }} />
+                                                        <PolarRadiusAxis angle={30} domain={[0, 5]} tick={false} axisLine={false} />
+                                                        <Radar
+                                                            name="平均分"
+                                                            dataKey="A"
+                                                            stroke="#2563eb"
+                                                            strokeWidth={3}
+                                                            fill="#3b82f6"
+                                                            fillOpacity={0.4}
+                                                        />
+                                                        <Tooltip />
+                                                    </RadarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        </div>
+
+                                        {/* Word Cloud */}
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex-1" style={{ minHeight: '250px' }}>
+                                            <h2 className="text-lg font-bold text-gray-800 mb-2">關鍵字詞雲 (Q9 & Q10)</h2>
+                                            <WordCloud />
+                                        </div>
+
+                                    </div>
+                                </div>
+
+                                {/* Text Feedback Section */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+                                    
+                                    {/* Q9 Feedback */}
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: '500px' }}>
+                                        <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                                            <MessageSquare className="w-5 h-5 text-blue-500" />
+                                            <h3 className="text-lg font-bold text-gray-800">Q9. 對於本考題之建議？</h3>
+                                        </div>
+                                        <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
+                                            {feedbackQ9.length > 0 ? feedbackQ9.map((item, idx) => (
+                                                <div key={idx} className="py-4 first:pt-0">
+                                                    <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
+                                                    <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
+                                                        <Users className="w-3 h-3" />
+                                                        {item.examiner} 
+                                                        <span className="text-gray-300">|</span>
+                                                        第{item.station}站
+                                                        <span className="text-gray-300">|</span>
+                                                        {item.date}
+                                                    </div>
+                                                </div>
+                                            )) : (
+                                                <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Q10 Feedback */}
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: '500px' }}>
+                                        <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                                            <MessageSquare className="w-5 h-5 text-green-500" />
+                                            <h3 className="text-lg font-bold text-gray-800">Q10. 整體活動建議？</h3>
+                                        </div>
+                                        <div className="p-6 overflow-y-auto divide-y divide-gray-100 flex-1">
+                                            {feedbackQ10.length > 0 ? feedbackQ10.map((item, idx) => (
+                                                <div key={idx} className="py-4 first:pt-0">
+                                                    <p className="text-gray-700 mb-2 leading-relaxed">"{item.text}"</p>
+                                                    <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 inline-block px-2 py-1 rounded">
+                                                        <Users className="w-3 h-3" />
+                                                        {item.examiner} 
+                                                        <span className="text-gray-300">|</span>
+                                                        第{item.station}站
+                                                        <span className="text-gray-300">|</span>
+                                                        {item.date}
+                                                    </div>
+                                                </div>
+                                            )) : (
+                                                <div className="text-center py-8 text-gray-400">此篩選條件下無文字回饋</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </>
+                        )}
+
                     </div>
                 </div>
+            );
+        }
 
-            </div>
-          </>
-        )}
-
-      </div>
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ExaminerDashboard />);
+    </script>
+</body>
+</html>
