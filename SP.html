@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>標準化病人 (SP) 回饋儀表板</title>
+    
+    <!-- Tailwind CSS (作為基礎 Reset 使用) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 1. React Core -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- 2. Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 3. Recharts Dependencies (CRITICAL FIX) -->
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    
+    <!-- 4. Recharts (Stable CDN Version) -->
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+
+    <style>
+        body {
+            background-color: #f9fafb; /* bgMain matches THEME */
+            color: #1f2937; /* textMain matches THEME */
+            font-family: "Microsoft JhengHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+        
+        // Destructure Recharts components from global window object
+        const { 
+            Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
+            Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid 
+        } = window.Recharts;
+
+        // --- Icons (Manual SVG implementation) ---
+        const IconWrapper = ({ children, size = 24, color = "currentColor", style = {} }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width={size} 
+                height={size} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke={color} 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                style={style}
+            >
+                {children}
+            </svg>
+        );
+
+        const ClipboardList = (props) => <IconWrapper {...props}><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></IconWrapper>;
+        const Users = (props) => <IconWrapper {...props}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconWrapper>;
+        const Star = (props) => <IconWrapper {...props}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></IconWrapper>;
+        const Loader2 = (props) => <IconWrapper {...props}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></IconWrapper>;
+        const Activity = (props) => <IconWrapper {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconWrapper>;
+        const Heart = (props) => <IconWrapper {...props}><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></IconWrapper>;
+        const Info = (props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></IconWrapper>;
+        const MessageSquare = (props) => <IconWrapper {...props}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></IconWrapper>;
+        const ChevronDown = (props) => <IconWrapper {...props}><polyline points="6 9 12 15 18 9"/></IconWrapper>;
+
+        // --- 設定區 ---
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
+
+        const SP_QUESTIONS = {
+            Q1: "1. 劇本演出順暢",
+            Q2: "2. 考前演練協助充足",
+            Q3: "3. 劇本訊息足夠",
+            Q4: "4. 演出次數可負擔",
+            Q5: "5. 換場休息時間足夠",
+            Q6: "6. 活動聯繫作業順暢",
+        };
+
+        // --- 樣式常數 (Hex Codes Only) ---
+        const THEME = {
+            primary: '#9333ea',       
+            primaryLight: '#f3e8ff',  
+            primaryBg: '#faf5ff',     
+            textMain: '#1f2937',      
+            textSub: '#6b7280',       
+            bgMain: '#f9fafb',        
+            border: '#e5e7eb',        
+            white: '#ffffff',
+            
+            // 分數顏色
+            score5: '#8b5cf6', score4: '#a78bfa', score3: '#e5e7eb', score2: '#fdba74', score1: '#ef4444',
+            
+            // 狀態顏色
+            success: '#16a34a', successBg: '#f0fdf4', successBorder: '#dcfce7',
+            danger: '#dc2626', dangerBg: '#fef2f2', dangerBorder: '#fee2e2',
+        };
+
+        const SCORE_COLOR_MAP = {
+            5: THEME.score5, 4: THEME.score4, 3: THEME.score3, 2: THEME.score2, 1: THEME.score1
+        };
+
+        // --- 輔助函式 ---
+        const parseScore = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            const parsed = parseFloat(String(val).replace(/[^0-9.]/g, '')); 
+            return isNaN(parsed) ? 0 : parsed;
+        };
+
+        // --- UI 元件 (使用純 Inline Style) ---
+
+        const StatCard = ({ title, value, subtitle, icon: Icon }) => (
+            <div style={{
+                backgroundColor: THEME.white,
+                borderRadius: '0.75rem',
+                boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+                border: `1px solid ${THEME.primaryLight}`,
+                padding: '1.5rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                flex: '1 1 250px' // Responsive flex
+            }}>
+                <div>
+                    <h3 style={{ fontSize: '0.75rem', fontWeight: '700', textTransform: 'uppercase', color: THEME.textSub, marginBottom: '0.25rem' }}>{title}</h3>
+                    <div style={{ fontSize: '1.875rem', fontWeight: '700', color: THEME.textMain }}>{value}</div>
+                    {subtitle && <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: THEME.textSub }}>{subtitle}</div>}
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '9999px', backgroundColor: THEME.primaryLight }}>
+                    <Icon size={24} color={THEME.primary} />
+                </div>
+            </div>
+        );
+
+        const WorkloadCard = ({ actual, preferred }) => {
+            // 確保數值有效
+            const valActual = parseFloat(actual) || 0;
+            const valPreferred = parseFloat(preferred) || 0;
+            
+            const diff = valActual - valPreferred;
+            // 如果沒有填寫期望次數(為0)，則不計算過勞，避免誤判
+            const isOverload = valPreferred > 0 && diff > 0.5;
+
+            const containerStyle = {
+                backgroundColor: isOverload ? THEME.dangerBg : THEME.successBg,
+                borderColor: isOverload ? THEME.dangerBorder : THEME.successBorder,
+                borderWidth: '1px',
+                borderStyle: 'solid',
+                borderRadius: '0.75rem',
+                padding: '1.5rem',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+            };
+
+            const textColor = isOverload ? THEME.danger : THEME.success;
+
+            return (
+                <div style={containerStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                        <h3 style={{ fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.5rem', color: textColor }}>
+                            <Activity size={20} />
+                            體力負荷分析 (演出場次)
+                        </h3>
+                        {isOverload && (
+                            <span style={{ backgroundColor: THEME.white, fontSize: '0.75rem', padding: '0.25rem 0.5rem', borderRadius: '0.25rem', border: `1px solid ${THEME.dangerBorder}`, fontWeight: '700', color: THEME.danger }}>
+                                過勞注意
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1.5rem', marginBottom: '0.5rem' }}>
+                        <div>
+                            <p style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '0.25rem', color: THEME.textMain }}>平均實際演出</p>
+                            <p style={{ fontSize: '1.875rem', fontWeight: '900', color: textColor }}>{valActual > 0 ? valActual : '-'}</p>
+                        </div>
+                        <div style={{ paddingBottom: '0.5rem', opacity: 0.4, fontWeight: '700', fontSize: '1.25rem', color: THEME.textSub }}>vs</div>
+                        <div>
+                            <p style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '0.25rem', color: THEME.textMain }}>平均建議場次</p>
+                            <p style={{ fontSize: '1.875rem', fontWeight: '900', color: textColor }}>{valPreferred > 0 ? valPreferred : '-'}</p>
+                        </div>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: textColor }}>
+                        {isOverload 
+                            ? `平均每位 SP 多演出了 ${diff.toFixed(1)} 場，建議增加休息或輪替。` 
+                            : (valActual > 0 ? "演出場次安排合宜，符合 SP 體力預期。" : "尚無演出次數資料。")}
+                    </p>
+                </div>
+            );
+        };
+
+        const StackedBarRow = ({ label, data, total }) => {
+            return (
+                <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.5rem' }}>
+                        <h4 style={{ fontSize: '0.875rem', fontWeight: '500', flex: 1, marginRight: '1rem', color: THEME.textMain }}>{label}</h4>
+                        <span style={{ fontSize: '0.75rem', color: THEME.textSub }}>N={total}</span>
+                    </div>
+                    <div style={{ height: '1rem', width: '100%', display: 'flex', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#f3f4f6' }}>
+                        {[5, 4, 3, 2, 1].map((score) => {
+                            const count = data[score] || 0;
+                            const percentage = total > 0 ? (count / total) * 100 : 0;
+                            if (percentage === 0) return null;
+                            return (
+                                <div
+                                    key={score}
+                                    style={{ width: `${percentage}%`, backgroundColor: SCORE_COLOR_MAP[score], height: '100%' }}
+                                    title={`${score}分: ${count}人`}
+                                />
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 主程式 ---
+
+        function SpDashboard() {
+            const [rawData, setRawData] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            
+            const [filterDate, setFilterDate] = useState('All');
+            const [filterStation, setFilterStation] = useState('All');
+            const [filterBatch, setFilterBatch] = useState('All');
+
+            useEffect(() => {
+                setLoading(true);
+                fetch(GOOGLE_SCRIPT_URL)
+                    .then(res => {
+                        if (!res.ok) throw new Error('Network response failed');
+                        return res.json();
+                    })
+                    .then(json => {
+                        const spList = (json.sp || []).map(d => ({
+                            ...d,
+                            station: parseInt(d.station) || d.station,
+                            q1: parseScore(d.q1),
+                            q2: parseScore(d.q2),
+                            q3: parseScore(d.q3),
+                            q4: parseScore(d.q4),
+                            q5: parseScore(d.q5),
+                            q6: parseScore(d.q6),
+                            q4_1: parseScore(d.q4_1), 
+                            q4_2: parseScore(d.q4_2), 
+                            q7: d.q7                  
+                        }));
+                        setRawData(spList);
+                        setLoading(false);
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        setError("無法讀取資料，請確認 GAS 部署設定。");
+                        setLoading(false);
+                    });
+            }, []);
+
+            const dates = useMemo(() => ['All', ...new Set(rawData.map(d => d.date))], [rawData]);
+            const stations = useMemo(() => ['All', ...new Set(rawData.map(d => d.station))].sort((a, b) => a - b), [rawData]);
+            const batches = useMemo(() => ['All', ...new Set(rawData.map(d => d.batch).filter(Boolean))], [rawData]);
+
+            const filteredData = useMemo(() => {
+                return rawData.filter(item => {
+                    const dateMatch = filterDate === 'All' || item.date === filterDate;
+                    const stationMatch = filterStation === 'All' || item.station === (filterStation === 'All' ? item.station : parseInt(filterStation));
+                    const batchMatch = filterBatch === 'All' || item.batch === filterBatch;
+                    return dateMatch && stationMatch && batchMatch;
+                });
+            }, [rawData, filterDate, filterStation, filterBatch]);
+
+            const stats = useMemo(() => {
+                const count = filteredData.length;
+                if (count === 0) return { count: 0, avg: 0, workloadActual: 0, workloadPref: 0 };
+
+                let totalScore = 0;
+                let totalItems = 0;
+                ['q1','q2','q3','q4','q5','q6'].forEach(q => {
+                    totalScore += filteredData.reduce((acc, cur) => acc + cur[q], 0);
+                    totalItems += count;
+                });
+
+                // --- 修正：演出次數計算邏輯 ---
+                const validActualData = filteredData.filter(d => d.q4_1 > 0);
+                const workloadActual = validActualData.length > 0 
+                    ? (validActualData.reduce((acc, cur) => acc + cur.q4_1, 0) / validActualData.length).toFixed(1) 
+                    : 0;
+
+                const validPrefData = filteredData.filter(d => d.q4_2 > 0);
+                const workloadPref = validPrefData.length > 0 
+                    ? (validPrefData.reduce((acc, cur) => acc + cur.q4_2, 0) / validPrefData.length).toFixed(1) 
+                    : 0;
+
+                return {
+                    count,
+                    avg: (totalScore / totalItems).toFixed(1),
+                    workloadActual,
+                    workloadPref
+                };
+            }, [filteredData]);
+
+            const distributionData = useMemo(() => {
+                return Object.keys(SP_QUESTIONS).map(key => {
+                    const qId = key.toLowerCase();
+                    const counts = {1:0, 2:0, 3:0, 4:0, 5:0};
+                    filteredData.forEach(d => {
+                        const s = Math.round(d[qId]); 
+                        if(counts[s] !== undefined) counts[s]++;
+                    });
+                    return { key, label: SP_QUESTIONS[key], ...counts, total: filteredData.length };
+                });
+            }, [filteredData]);
+
+            const radarData = useMemo(() => {
+                return Object.keys(SP_QUESTIONS).map(key => {
+                    const qId = key.toLowerCase();
+                    const sum = filteredData.reduce((acc, cur) => acc + cur[qId], 0);
+                    const avg = filteredData.length ? (sum / filteredData.length).toFixed(2) : 0;
+                    return { subject: key, A: parseFloat(avg), fullMark: 5 };
+                });
+            }, [filteredData]);
+
+            const comments = useMemo(() => filteredData.filter(d => d.q7 && String(d.q7).trim() !== "").map(d => ({...d, text: d.q7})), [filteredData]);
+
+            // --- 通用輸入框樣式 ---
+            const inputStyle = {
+                width: '100%',
+                backgroundColor: '#f9fafb',
+                border: `1px solid ${THEME.border}`,
+                color: THEME.textMain,
+                padding: '0.5rem 0.75rem',
+                borderRadius: '0.375rem',
+                outline: 'none',
+                fontSize: '0.875rem'
+            };
+
+            const labelStyle = {
+                display: 'block',
+                fontSize: '0.75rem',
+                fontWeight: '700',
+                textTransform: 'uppercase',
+                marginBottom: '0.25rem',
+                color: THEME.textSub
+            };
+
+            return (
+                <div style={{ fontFamily: 'sans-serif', backgroundColor: THEME.bgMain, color: THEME.textMain, minHeight: '100vh', paddingBottom: '3rem', boxSizing: 'border-box' }}>
+                    
+                    {/* Inject Keyframes for Spinner */}
+                    <style>{`
+                        @keyframes spin {
+                        from { transform: rotate(0deg); }
+                        to { transform: rotate(360deg); }
+                        }
+                    `}</style>
+
+                    {/* Header */}
+                    <div style={{ backgroundColor: THEME.white, borderBottom: `1px solid ${THEME.primaryLight}`, position: 'sticky', top: 0, zIndex: 30, boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }}>
+                        <div style={{ maxWidth: '1152px', margin: '0 auto', padding: '0 1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', height: '4rem', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{ padding: '0.5rem', borderRadius: '0.5rem', backgroundColor: THEME.primary, display: 'flex' }}>
+                                <Users size={20} color="white" />
+                            </div>
+                            <div>
+                                <h1 style={{ fontWeight: '700', fontSize: '1.125rem', lineHeight: '1.2', color: THEME.textMain, margin: 0 }}>標準化病人 (SP) 回饋分析</h1>
+                                <p style={{ fontSize: '0.75rem', fontWeight: '500', color: THEME.primary, margin: 0 }}>OSCE 臨床技能測驗</p>
+                            </div>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', backgroundColor: '#f9fafb', padding: '0.25rem 0.75rem', borderRadius: '9999px', border: `1px solid ${THEME.border}`, color: THEME.textSub }}>
+                            獨立部署版 v5.0 (HTML)
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+
+                    <div style={{ maxWidth: '1152px', margin: '2rem auto 0', padding: '0 1rem' }}>
+                        
+                        {loading && (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '5rem 0', color: THEME.textSub }}>
+                                <Loader2 size={32} style={{ color: THEME.primary, marginBottom: '0.5rem', animation: 'spin 1s linear infinite' }}/>
+                                <p>正在讀取 SP 回饋資料...</p>
+                            </div>
+                        )}
+
+                        {error && (
+                            <div style={{ backgroundColor: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: '#b91c1c', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+                                {error}
+                            </div>
+                        )}
+
+                        {!loading && !error && (
+                            <>
+                                {/* Filter Section */}
+                                <div style={{ backgroundColor: THEME.white, border: `1px solid ${THEME.primaryLight}`, borderRadius: '0.75rem', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)', padding: '1.5rem', marginBottom: '2rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'end' }}>
+                                        <div>
+                                            <label style={labelStyle}>選擇日期</label>
+                                            <select 
+                                                style={inputStyle}
+                                                value={filterDate} onChange={e => setFilterDate(e.target.value)}
+                                            >
+                                                <option value="All">全部日期</option>
+                                                {dates.map(d => <option key={d} value={d}>{d}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={labelStyle}>選擇站別</label>
+                                            <select 
+                                                style={inputStyle}
+                                                value={filterStation} onChange={e => setFilterStation(e.target.value)}
+                                            >
+                                                <option value="All">全部站別</option>
+                                                {stations.map(s => <option key={s} value={s}>第 {s} 站</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={labelStyle}>選擇梯次</label>
+                                            <select 
+                                                style={inputStyle}
+                                                value={filterBatch} onChange={e => setFilterBatch(e.target.value)}
+                                            >
+                                                <option value="All">全部梯次</option>
+                                                {batches.map(b => <option key={b} value={b}>{b}</option>)}
+                                            </select>
+                                        </div>
+                                        <div style={{ textAlign: 'right', paddingBottom: '0.5rem' }}>
+                                            <span style={{ display: 'inline-block', fontSize: '0.875rem', fontWeight: '500', padding: '0.25rem 0.75rem', borderRadius: '9999px', backgroundColor: THEME.primaryBg, color: THEME.primary }}>
+                                                共 {stats.count} 份回饋
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* KPI Cards */}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '2rem' }}>
+                                    <StatCard title="整體平均滿意度" value={stats.avg} subtitle="滿分 5.0" icon={Star} />
+                                    <StatCard title="平均實際演出" value={stats.workloadActual} subtitle="次 / 每場 (有效填答)" icon={Activity} />
+                                    <StatCard title="期望適宜演出" value={stats.workloadPref} subtitle="次 / 每場 (有效填答)" icon={Heart} />
+                                </div>
+
+                                {/* Main Charts Grid */}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '2rem' }}>
+                                    {/* Left: Stacked Bar */}
+                                    <div style={{ flex: '2 1 500px', backgroundColor: THEME.white, border: `1px solid ${THEME.primaryLight}`, borderRadius: '0.75rem', padding: '1.5rem', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }}>
+                                        <h2 style={{ fontSize: '1.125rem', fontWeight: '700', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: THEME.textMain }}>
+                                            <ClipboardList size={20} color={THEME.primary} />
+                                            各項指標滿意度分佈
+                                        </h2>
+                                        <div>
+                                            {distributionData.map(d => (
+                                                <StackedBarRow key={d.key} label={d.label} data={d} total={d.total} />
+                                            ))}
+                                        </div>
+                                        <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', fontSize: '0.75rem', color: THEME.textSub }}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.25rem'}}><div style={{width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: SCORE_COLOR_MAP[5]}}></div>非常同意</div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.25rem'}}><div style={{width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: SCORE_COLOR_MAP[4]}}></div>同意</div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.25rem'}}><div style={{width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: SCORE_COLOR_MAP[3]}}></div>無意見</div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.25rem'}}><div style={{width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: SCORE_COLOR_MAP[2]}}></div>不同意</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Right: Radar & Workload */}
+                                    <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                        {/* Radar */}
+                                        <div style={{ flex: 1, minHeight: '300px', backgroundColor: THEME.white, border: `1px solid ${THEME.primaryLight}`, borderRadius: '0.75rem', padding: '1.5rem', display: 'flex', flexDirection: 'column', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }}>
+                                            <h2 style={{ fontSize: '0.875rem', fontWeight: '700', textTransform: 'uppercase', textAlign: 'center', marginBottom: '0.5rem', color: THEME.textSub }}>整體向度雷達圖</h2>
+                                            <div style={{ flex: 1, position: 'relative' }}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                                                        <PolarGrid stroke="#e5e7eb" />
+                                                        <PolarAngleAxis dataKey="subject" tick={{ fontSize: 10, fontWeight: 'bold', fill: THEME.primary }} />
+                                                        <PolarRadiusAxis angle={30} domain={[0, 5]} tick={false} axisLine={false} />
+                                                        <Radar name="SP Score" dataKey="A" stroke={THEME.primary} fill={THEME.primary} fillOpacity={0.5} />
+                                                        <Tooltip />
+                                                    </RadarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        </div>
+
+                                        {/* Workload Card */}
+                                        <div style={{ flex: 1 }}>
+                                            <WorkloadCard actual={parseFloat(stats.workloadActual)} preferred={parseFloat(stats.workloadPref)} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Comments Section */}
+                                <div style={{ backgroundColor: THEME.white, border: `1px solid ${THEME.primaryLight}`, borderRadius: '0.75rem', overflow: 'hidden', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }}>
+                                    <div style={{ padding: '1.25rem', borderBottom: `1px solid ${THEME.primaryLight}`, backgroundColor: THEME.primaryBg, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <MessageSquare size={20} color={THEME.primary} />
+                                        <h3 style={{ fontWeight: '700', color: THEME.textMain, margin: 0 }}>SP 質性建議與回饋 (Q7)</h3>
+                                    </div>
+                                    <div style={{ overflowY: 'auto', padding: '1.5rem', maxHeight: '400px' }}>
+                                        {comments.length > 0 ? (
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
+                                                {comments.map((c, idx) => (
+                                                    <div key={idx} style={{ padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem', border: `1px solid ${THEME.border}` }}>
+                                                        <p style={{ marginBottom: '0.75rem', lineHeight: '1.625', color: THEME.textMain }}>
+                                                            {c.text}
+                                                        </p>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: THEME.textSub }}>
+                                                            <span style={{ backgroundColor: THEME.white, border: `1px solid ${THEME.border}`, padding: '0.125rem 0.5rem', borderRadius: '0.25rem', fontWeight: '500', color: THEME.primary }}>
+                                                                {c.name}
+                                                            </span>
+                                                            <span>|</span>
+                                                            <span>第 {c.station} 站</span>
+                                                            <span>|</span>
+                                                            <span>{c.date}</span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', padding: '3rem 0', color: THEME.textSub }}>
+                                                <Info size={32} style={{ margin: '0 auto 0.5rem auto', opacity: 0.2 }} />
+                                                此篩選條件下無文字回饋
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SpDashboard />);
+    </script>
+</body>
+</html>
