@@ -23,27 +23,64 @@
 
     <style>
         body {
-            background-color: #f9fafb; /* bgMain matches THEME */
-            color: #1f2937; /* textMain matches THEME */
+            background-color: #f9fafb;
+            color: #1f2937;
             font-family: "Microsoft JhengHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Navigation Tabs */
+        .nav-tabs { display: flex; gap: 0.5rem; margin-left: 1rem; flex-wrap: wrap; }
+        .nav-tab { 
+            padding: 0.5rem 1rem; 
+            border-radius: 0.5rem; 
+            font-size: 0.875rem; 
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .nav-tab:hover { 
+            background-color: #f3e8ff; 
+            transform: translateY(-2px);
+            box-shadow: 0 2px 8px rgba(147, 51, 234, 0.15);
+        }
+        .nav-tab.active { 
+            background: linear-gradient(135deg, #9333ea 0%, #7e22ce 100%);
+            color: white; 
+            border-color: #9333ea;
+            box-shadow: 0 4px 12px rgba(147, 51, 234, 0.3);
+        }
+        .nav-tab:not(.active) { color: #6b7280; }
+
+        /* Header Styles */
+        .main-title {
+            font-size: 1.75rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #9333ea 0%, #c026d3 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.025em;
+        }
+        
         /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1; 
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #cbd5e1; 
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8; 
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .nav-tabs { margin-left: 0; margin-top: 0.5rem; width: 100%; }
+            .main-title { font-size: 1.25rem; }
         }
     </style>
 </head>
@@ -86,6 +123,8 @@
         const Info = (props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></IconWrapper>;
         const MessageSquare = (props) => <IconWrapper {...props}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></IconWrapper>;
         const ChevronDown = (props) => <IconWrapper {...props}><polyline points="6 9 12 15 18 9"/></IconWrapper>;
+        const Award = (props) => <IconWrapper {...props}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></IconWrapper>;
+        const UserCheck = (props) => <IconWrapper {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></IconWrapper>;
 
         // --- 設定區 ---
         const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzZusUTAQU3Xq5056fPrc-Ye-6sfN8Ok-vNhKyds2Wo3Eev_rOEGJQ0VTtfCkYZioE/exec"; 
@@ -284,6 +323,18 @@
             const stations = useMemo(() => ['All', ...new Set(rawData.map(d => d.station))].sort((a, b) => a - b), [rawData]);
             const batches = useMemo(() => ['All', ...new Set(rawData.map(d => d.batch).filter(Boolean))], [rawData]);
 
+            // 計算最新日期
+            const latestDate = useMemo(() => {
+                if (rawData.length === 0) return '2025/01/20';
+                const validDates = rawData.map(d => d.date).filter(d => d);
+                if (validDates.length === 0) return '2025/01/20';
+                return validDates.sort((a, b) => {
+                    const dateA = new Date(a.replace(/\//g, '-'));
+                    const dateB = new Date(b.replace(/\//g, '-'));
+                    return dateB - dateA;
+                })[0];
+            }, [rawData]);
+
             const filteredData = useMemo(() => {
                 return rawData.filter(item => {
                     const dateMatch = filterDate === 'All' || item.date === filterDate;
@@ -379,22 +430,36 @@
                     `}</style>
 
                     {/* Header */}
-                    <div style={{ backgroundColor: THEME.white, borderBottom: `1px solid ${THEME.primaryLight}`, position: 'sticky', top: 0, zIndex: 30, boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }}>
+                    <div style={{ backgroundColor: THEME.white, borderBottom: `2px solid ${THEME.primary}`, position: 'sticky', top: 0, zIndex: 30, boxShadow: '0 4px 12px rgba(0, 0, 0, 0.05)' }}>
                         <div style={{ maxWidth: '1152px', margin: '0 auto', padding: '0 1rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', height: '4rem', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                            <div style={{ padding: '0.5rem', borderRadius: '0.5rem', backgroundColor: THEME.primary, display: 'flex' }}>
-                                <Users size={20} color="white" />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '1.25rem', paddingBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <div style={{ padding: '0.75rem', borderRadius: '0.75rem', background: 'linear-gradient(135deg, #9333ea 0%, #7e22ce 100%)', display: 'flex', boxShadow: '0 4px 12px rgba(147, 51, 234, 0.3)' }}>
+                                        <Users size={28} color="white" />
+                                    </div>
+                                    <h1 className="main-title" style={{ margin: 0 }}>臨床技能測驗(OSCE)回饋分析系統</h1>
+                                </div>
+                                
+                                {/* Navigation Tabs */}
+                                <div className="nav-tabs">
+                                    <a href="index.html" className="nav-tab">
+                                        <Award size={16} />
+                                        考官回饋
+                                    </a>
+                                    <a href="SP.html" className="nav-tab active">
+                                        <Users size={16} />
+                                        標準化病人回饋
+                                    </a>
+                                    <a href="student.html" className="nav-tab">
+                                        <UserCheck size={16} />
+                                        考生回饋
+                                    </a>
+                                </div>
+
+                                <div style={{ fontSize: '0.75rem', backgroundColor: '#faf5ff', padding: '0.375rem 0.875rem', borderRadius: '9999px', border: `1px solid ${THEME.primary}`, color: THEME.primary, fontWeight: '600' }}>
+                                    更新日期: {latestDate}
+                                </div>
                             </div>
-                            <div>
-                                <h1 style={{ fontWeight: '700', fontSize: '1.125rem', lineHeight: '1.2', color: THEME.textMain, margin: 0 }}>標準化病人 (SP) 回饋分析</h1>
-                                <p style={{ fontSize: '0.75rem', fontWeight: '500', color: THEME.primary, margin: 0 }}>OSCE 臨床技能測驗</p>
-                            </div>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', backgroundColor: '#f9fafb', padding: '0.25rem 0.75rem', borderRadius: '9999px', border: `1px solid ${THEME.border}`, color: THEME.textSub }}>
-                            獨立部署版 v5.0 (HTML)
-                            </div>
-                        </div>
                         </div>
                     </div>
 
