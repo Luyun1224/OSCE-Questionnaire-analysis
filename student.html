@@ -129,7 +129,7 @@
         };
 
         const THEME = {
-            green: '#059669',  // 主題色改為深綠色
+            green: '#059669',  // 主題色改为深綠色
             greenLight: '#10b981',
             blue: '#3b82f6',
             purple: '#8b5cf6',
@@ -199,6 +199,7 @@
             const [data, setData] = useState([]);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
+            const [filterYear, setFilterYear] = useState('All');
             const [filterDate, setFilterDate] = useState('All');
 
             useEffect(() => {
@@ -228,7 +229,29 @@
                 fetchData();
             }, []);
 
-            const dates = useMemo(() => ['All', ...new Set(data.map(d => d.date))], [data]);
+            // 提取年度列表（只取日期的年份部分，例如 111.1.11 → "111"）
+            const years = useMemo(() => {
+                const yearSet = new Set();
+                data.forEach(d => {
+                    if (d.date) {
+                        // 用 . 或 / 分割日期，取第一個部分作為年份
+                        const parts = d.date.split(/[./]/);
+                        if (parts.length > 0 && parts[0]) {
+                            yearSet.add(parts[0]);
+                        }
+                    }
+                });
+                // 按數字大小降序排列
+                return ['All', ...Array.from(yearSet).sort((a, b) => parseInt(b) - parseInt(a))];
+            }, [data]);
+
+            // 根據年度篩選日期列表
+            const dates = useMemo(() => {
+                const filteredByYear = filterYear === 'All' 
+                    ? data 
+                    : data.filter(d => d.date && d.date.split(/[./]/)[0] === filterYear);
+                return ['All', ...new Set(filteredByYear.map(d => d.date))];
+            }, [data, filterYear]);
             
             // 計算最新日期
             const latestDate = useMemo(() => {
@@ -242,7 +265,13 @@
                 })[0];
             }, [data]);
 
-            const filtered = useMemo(() => data.filter(d => filterDate === 'All' || d.date === filterDate), [data, filterDate]);
+            const filtered = useMemo(() => {
+                return data.filter(d => {
+                    const yearMatch = filterYear === 'All' || (d.date && d.date.split(/[./]/)[0] === filterYear);
+                    const dateMatch = filterDate === 'All' || d.date === filterDate;
+                    return yearMatch && dateMatch;
+                });
+            }, [data, filterYear, filterDate]);
 
             const stats = useMemo(() => {
                 const count = filtered.length;
@@ -345,12 +374,22 @@
                             <>
                                 {/* Filter */}
                                 <div className="st-card" style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+                                    <div style={{ width: '100%', maxWidth: '200px' }}>
+                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, textTransform: 'uppercase', marginBottom: '0.5rem' }}>選擇年度</label>
+                                        <div style={{ position: 'relative' }}>
+                                            <select style={inputStyle} value={filterYear} onChange={e=>{setFilterYear(e.target.value); setFilterDate('All');}}>
+                                                <option value="All">所有年度</option>
+                                                {years.filter(y => y !== 'All').map(y=><option key={y} value={y}>{y}年度</option>)}
+                                            </select>
+                                            <ChevronDown style={{position:'absolute', right:'0.75rem', top:'0.75rem', width:16, color:'#9ca3af', pointerEvents:'none'}} />
+                                        </div>
+                                    </div>
                                     <div style={{ width: '100%', maxWidth: '250px' }}>
                                         <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', color: THEME.textSub, textTransform: 'uppercase', marginBottom: '0.5rem' }}>選擇日期</label>
                                         <div style={{ position: 'relative' }}>
                                             <select style={inputStyle} value={filterDate} onChange={e=>setFilterDate(e.target.value)}>
                                                 <option value="All">所有日期</option>
-                                                {dates.map(d=><option key={d} value={d}>{d}</option>)}
+                                                {dates.filter(d => d !== 'All').map(d=><option key={d} value={d}>{d}</option>)}
                                             </select>
                                             <ChevronDown style={{position:'absolute', right:'0.75rem', top:'0.75rem', width:16, color:'#9ca3af', pointerEvents:'none'}} />
                                         </div>

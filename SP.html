@@ -284,6 +284,7 @@
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
             
+            const [filterYear, setFilterYear] = useState('All');
             const [filterDate, setFilterDate] = useState('All');
             const [filterStation, setFilterStation] = useState('All');
             const [filterBatch, setFilterBatch] = useState('All');
@@ -319,7 +320,30 @@
                     });
             }, []);
 
-            const dates = useMemo(() => ['All', ...new Set(rawData.map(d => d.date))], [rawData]);
+            // 提取年度列表（只取日期的年份部分，例如 111.1.11 → "111"）
+            const years = useMemo(() => {
+                const yearSet = new Set();
+                rawData.forEach(d => {
+                    if (d.date) {
+                        // 用 . 或 / 分割日期，取第一個部分作為年份
+                        const parts = d.date.split(/[./]/);
+                        if (parts.length > 0 && parts[0]) {
+                            yearSet.add(parts[0]);
+                        }
+                    }
+                });
+                // 按數字大小降序排列
+                return ['All', ...Array.from(yearSet).sort((a, b) => parseInt(b) - parseInt(a))];
+            }, [rawData]);
+
+            // 根據年度篩選日期列表
+            const dates = useMemo(() => {
+                const filteredByYear = filterYear === 'All' 
+                    ? rawData 
+                    : rawData.filter(d => d.date && d.date.split(/[./]/)[0] === filterYear);
+                return ['All', ...new Set(filteredByYear.map(d => d.date))];
+            }, [rawData, filterYear]);
+
             const stations = useMemo(() => ['All', ...new Set(rawData.map(d => d.station))].sort((a, b) => a - b), [rawData]);
             const batches = useMemo(() => ['All', ...new Set(rawData.map(d => d.batch).filter(Boolean))], [rawData]);
 
@@ -337,12 +361,13 @@
 
             const filteredData = useMemo(() => {
                 return rawData.filter(item => {
+                    const yearMatch = filterYear === 'All' || (item.date && item.date.split(/[./]/)[0] === filterYear);
                     const dateMatch = filterDate === 'All' || item.date === filterDate;
                     const stationMatch = filterStation === 'All' || item.station === (filterStation === 'All' ? item.station : parseInt(filterStation));
                     const batchMatch = filterBatch === 'All' || item.batch === filterBatch;
-                    return dateMatch && stationMatch && batchMatch;
+                    return yearMatch && dateMatch && stationMatch && batchMatch;
                 });
-            }, [rawData, filterDate, filterStation, filterBatch]);
+            }, [rawData, filterYear, filterDate, filterStation, filterBatch]);
 
             const stats = useMemo(() => {
                 const count = filteredData.length;
@@ -484,13 +509,23 @@
                                 <div style={{ backgroundColor: THEME.white, border: `1px solid ${THEME.primaryLight}`, borderRadius: '0.75rem', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)', padding: '1.5rem', marginBottom: '2rem' }}>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'end' }}>
                                         <div>
+                                            <label style={labelStyle}>選擇年度</label>
+                                            <select 
+                                                style={inputStyle}
+                                                value={filterYear} onChange={e => {setFilterYear(e.target.value); setFilterDate('All');}}
+                                            >
+                                                <option value="All">全部年度</option>
+                                                {years.filter(y => y !== 'All').map(y => <option key={y} value={y}>{y}年度</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
                                             <label style={labelStyle}>選擇日期</label>
                                             <select 
                                                 style={inputStyle}
                                                 value={filterDate} onChange={e => setFilterDate(e.target.value)}
                                             >
                                                 <option value="All">全部日期</option>
-                                                {dates.map(d => <option key={d} value={d}>{d}</option>)}
+                                                {dates.filter(d => d !== 'All').map(d => <option key={d} value={d}>{d}</option>)}
                                             </select>
                                         </div>
                                         <div>
